@@ -8,6 +8,8 @@ Device secrets are 32 random bytes. Only purpose/namespace-scoped HMAC-SHA256 ve
 
 Keep server keys outside database backups and Git. Preserve previous device keys during ordinary rotation via `previous_device_keys`; valid logins rehash to the new key. Rotation is not revocation. Do not discard old keys while un-upgraded permanent bindings still depend on them. Pending transfer codes may be reissued when the transfer key changes.
 
+Candidate status and pending-proof retries use the same retained-key verification and rehash policy as active logins. A device-key rotation with retained keys does not abandon a linked transfer awaiting native activation.
+
 Browser cookies are Secure, HttpOnly, host-only and SameSite=Strict; mutating requests require an exact allowed Origin. Native storage is an application-supplied OS-backed secure vault. Browser clearing or loss of the only device can still destroy access; Fuel does not recover accounts from public IDs. A new transfer candidate does not overwrite the previous guest.
 
 The application must provide HTTPS/WSS, database access controls, secret handling, proxy-level connection/header limits, game-specific deletion hooks and a plain-text chat renderer. The source-address limiter uses the socket IP; behind a proxy add trusted-source admission at that proxy. Fuel does not trust arbitrary forwarded headers.

@@ -103,7 +103,7 @@ module Fuel
         Fuel.check(prior.nil? || prior == candidate.id, "invalid_code")
         c.exec("INSERT INTO fuel_bindings(ns,id,verifier,expires_at) VALUES($1,$2,$3,now()+interval '5 minutes') ON CONFLICT DO NOTHING", @namespace, candidate.id, verifier(candidate))
         binding = c.query_one("SELECT account,verifier,revoked FROM fuel_bindings WHERE ns=$1 AND id=$2 FOR UPDATE", @namespace, candidate.id, as: {String?, String, Bool})
-        Fuel.check(binding[0].nil? && !binding[2] && Crypto::Subtle.constant_time_compare(binding[1], verifier(candidate)), "invalid_code")
+        Fuel.check(binding[0].nil? && !binding[2] && verify_proof(c, candidate, binding[1]), "invalid_code")
         phrase ||= Random::Secure.hex(3)
         c.exec("UPDATE fuel_pairs SET candidate=$3,phrase=$4 WHERE ns=$1 AND id=$2", @namespace, id, candidate.id, phrase)
         Fuel.json({id: id, phrase: phrase, status: "pending"})
@@ -141,10 +141,10 @@ module Fuel
 
     def pair_status(candidate : Credential) : JSON::Any
       transaction do |c|
-        binding = c.query_one?("SELECT verifier,account,revoked FROM fuel_bindings WHERE ns=$1 AND id=$2", @namespace, candidate.id, as: {String, String?, Bool})
+        binding = c.query_one?("SELECT verifier,account,revoked FROM fuel_bindings WHERE ns=$1 AND id=$2 FOR UPDATE", @namespace, candidate.id, as: {String, String?, Bool})
         Fuel.check(!binding.nil?, "unauthorized")
         b = binding.not_nil!
-        Fuel.check(!b[2] && Crypto::Subtle.constant_time_compare(b[0], verifier(candidate)), "unauthorized")
+        Fuel.check(!b[2] && verify_proof(c, candidate, b[0]), "unauthorized")
         return Fuel.json({status: "linked", account_id: b[1]}) if b[1]
         row = c.query_one?("SELECT id,phrase,status,expires_at>now() FROM fuel_pairs WHERE ns=$1 AND candidate=$2 ORDER BY expires_at DESC LIMIT 1", @namespace, candidate.id, as: {String, String?, String, Bool})
         raise Error.new("invalid_code") unless row
@@ -280,12 +280,16 @@ module Fuel
     private def verify(c : DB::Connection, credential : Credential) : String
       row = c.query_one?("SELECT b.account,b.verifier FROM fuel_bindings b JOIN fuel_accounts a ON a.ns=b.ns AND a.id=b.account WHERE b.ns=$1 AND b.id=$2 AND NOT b.revoked FOR UPDATE OF a,b", @namespace, credential.id, as: {String, String})
       raise Error.new("unauthorized") unless row
-      valid = ([@device_key] + @previous_device_keys).any? { |key| Crypto::Subtle.constant_time_compare(row[1], device_verifier(credential, key)) }
-      raise Error.new("unauthorized") unless valid
-      if row[1] != verifier(credential)
+      raise Error.new("unauthorized") unless verify_proof(c, credential, row[1])
+      row[0]
+    end
+
+    private def verify_proof(c : DB::Connection, credential : Credential, stored : String) : Bool
+      return false unless ([@device_key] + @previous_device_keys).any? { |key| Crypto::Subtle.constant_time_compare(stored, device_verifier(credential, key)) }
+      if stored != verifier(credential)
         c.exec("UPDATE fuel_bindings SET verifier=$3 WHERE ns=$1 AND id=$2", @namespace, credential.id, verifier(credential))
       end
-      row[0]
+      true
     end
 
     private def verifier(credential : Credential) : String

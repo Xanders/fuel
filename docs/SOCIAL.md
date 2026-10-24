@@ -16,6 +16,8 @@ Each locale contains ordered token pools. A full-name list is one pool; composit
 
 Chat messages are plain text. Render as text, never raw HTML. Membership is checked on reads and writes. Guild membership is checked again on each request. Optional persisted history is available only for guild/private channels and is bounded even when a channel becomes inactive. Session/global history stays in RAM. The supplied HTTP adapter limits message frequency per account. Game-specific mutes/reports and block policy need application hooks.
 
+The default HTTP adapter delivers chat through bounded history polling. To disable history, construct `Chat` with `history_limit: 0` and a `delivery: ->(kind : String, target : String, event : JSON::Any) { ...; nil }` callback wired to the game's live transport. Without that callback zero retention is rejected with `delivery_required`. The callback receives the censored event after any configured history write and outside the chat mutex. It must check each recipient's current access and bound its own transport queues. For private messages the target is the recipient and the event's actor is the sender. No message is retained at zero history, so disconnected recipients cannot recover it. Delivery errors can mean an unknown outcome; do not automatically resend as a new player intent.
+
 ## Questmetry
 
 Analytics is optional and off until constructed/configured. No public browser write key or server ingestion key is included. The server adapter accepts only configured event names/properties and bounded primitive values. Do not allow chat text, names, arbitrary URLs, account IDs or tokens as properties. Configure separate namespace/environment/version and server keys. Account/session identifiers are keyed pseudonyms.

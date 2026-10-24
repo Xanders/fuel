@@ -61,8 +61,9 @@ module Fuel
     @mutex = Mutex.new
     @authorize : Proc(String, String, String, Bool)
 
-    def initialize(@history_limit = 50, @max_channels = 2000, @ttl = 24.hours, @censor = Censor.new([] of String), @store : Store? = nil, @persist = [] of String, &@authorize : String, String, String -> Bool)
+    def initialize(@history_limit = 50, @max_channels = 2000, @ttl = 24.hours, @censor = Censor.new([] of String), @store : Store? = nil, @persist = [] of String, @delivery : Proc(String, String, JSON::Any, Nil)? = nil, &@authorize : String, String, String -> Bool)
       Fuel.check((0..1000).includes?(@history_limit) && @max_channels > 0, "invalid_capacity")
+      Fuel.check(@history_limit > 0 || !@delivery.nil?, "delivery_required")
       Fuel.check(@persist.all? { |kind| ["private", "guild"].includes?(kind) } && (@persist.empty? || !@store.nil?), "invalid_channel")
     end
 
@@ -70,20 +71,21 @@ module Fuel
       authorize(actor, kind, target)
       Fuel.check(!text.strip.empty? && text.bytesize <= 2000 && text.each_char.none? { |c| c.control? && c != '\n' }, "invalid_message")
       entry = Fuel.json({id: Fuel.id, actor: actor, text: @censor.filter(text.strip), created_at: Time.utc.to_unix})
-      if @persist.includes?(kind)
+      if @history_limit > 0 && @persist.includes?(kind)
         @store.not_nil!.save_chat(key(actor, kind, target), actor, kind == "private" ? target : "", entry, @history_limit, @ttl)
-        return entry
-      end
-      @mutex.synchronize do
-        cleanup
-        k = key(actor, kind, target)
-        Fuel.check(@history.has_key?(k) || @history.size < @max_channels, "capacity")
-        history = @history[k] ||= [] of JSON::Any
-        history << entry if @history_limit > 0
-        while history.size > @history_limit
-          history.shift
+      elsif @history_limit > 0
+        @mutex.synchronize do
+          cleanup
+          k = key(actor, kind, target)
+          Fuel.check(@history.has_key?(k) || @history.size < @max_channels, "capacity")
+          history = @history[k] ||= [] of JSON::Any
+          history << entry
+          while history.size > @history_limit
+            history.shift
+          end
         end
       end
+      @delivery.try(&.call(kind, target, JSON.parse(entry.to_json)))
       entry
     end
 

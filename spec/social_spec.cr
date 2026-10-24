@@ -10,6 +10,24 @@ describe Fuel::NameDictionary do
 end
 
 describe Fuel::Chat do
+  it "requires a live delivery adapter when retention is disabled" do
+    expect_raises(Fuel::Error, "delivery_required") do
+      Fuel::Chat.new(history_limit: 0) { |_, _, _| true }
+    end
+  end
+
+  it "delivers censored messages to another player without retaining history" do
+    received = [] of JSON::Any
+    chat = Fuel::Chat.new(history_limit: 0, censor: Fuel::Censor.new(["rude"]), delivery: ->(kind : String, target : String, event : JSON::Any) {
+      received << event if kind == "private" && target == "bob"
+      nil
+    }) { |_, _, _| true }
+    sent = chat.post("alice", "private", "bob", "RUDE")
+    received.first["id"].should eq(sent["id"])
+    received.first["text"].as_s.should eq("****")
+    chat.history("bob", "private", "alice").should be_empty
+  end
+
   it "checks channel access on both send and history and bounds retention" do
     chat = Fuel::Chat.new(history_limit: 1, censor: Fuel::Censor.new(["rude"])) do |actor, kind, target|
       kind == "global" || (kind == "session" && actor == "alice" && target == "room") || (kind == "guild" && actor == "alice" && target == "guild")

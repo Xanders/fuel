@@ -74,5 +74,31 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
       store.delete_account(b, true)
       expect_raises(Fuel::Error, "unauthorized") { store.authenticate(b) }
     end
+
+    it "recovers linked and pending candidate proofs across device key rotation" do
+      namespace = "rotation_#{Fuel.id}"
+      before = Fuel::Store.new(url, namespace, "a" * 32, "p" * 32)
+      after = Fuel::Store.new(url, namespace, "b" * 32, "p" * 32, previous_device_keys: ["a" * 32])
+      current_only = Fuel::Store.new(url, namespace, "b" * 32, "p" * 32)
+      owner = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      linked = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      pending = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      account = before.bootstrap(owner, "rotation")
+      first = before.issue_pair(owner)
+      requested = before.request_pair(first["code"].as_s, linked, "rotation")
+      before.approve_pair(owner, requested["id"].as_s)
+      second = before.issue_pair(owner)
+      before.request_pair(second["code"].as_s, pending, "rotation")
+      after.pair_status(linked)["account_id"].as_s.should eq(account)
+      current_only.authenticate(linked).should eq(account)
+      after.pair_status(pending)["status"].as_s.should eq("pending")
+      current_only.request_pair(second["code"].as_s, pending, "rotation")["status"].as_s.should eq("pending")
+      expect_raises(Fuel::Error, "unauthorized") { after.pair_status(Fuel::Credential.new(linked.id, Random::Secure.hex(32))) }
+      after.revoke(owner, linked.id)
+      expect_raises(Fuel::Error, "unauthorized") { after.pair_status(linked) }
+      before.close
+      after.close
+      current_only.close
+    end
   end
 end
