@@ -40,6 +40,8 @@ Native credentials use `Authorization: Fuel <binding-id>:<secret>` over TLS. Bro
 
 Snapshots contain `session_id, epoch, revision, state, server_time, last_input, ready`. Socket envelopes additionally contain `generation`; inputs are `{epoch,sequence:"1",action:{...}}`. Inputs are never replayed across reconnect; wait for the new generation and current snapshot. The server sends full snapshots about every 100 ms; a game's tick cadence is separate.
 
+Transfer preparation retains an outstanding candidate for retries. Once the linked candidate is safely retained as active/previous, preparation creates a fresh candidate for the next transfer. Add `?new=true` only for a deliberate new attempt, never as a response to network failure.
+
 Chat kinds: `global` (instance), `session` (target room ID, membership required), `guild` (target guild ID, callback required), `private` (target recipient account). No account ID in a body grants the sender that identity. Private history keys are canonical participant pairs. Sender/recipient block policies can be added by the application; the default private channel permits messages between authenticated accounts and is not a full moderation system.
 
 ## Error/recovery contract

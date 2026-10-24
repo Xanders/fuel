@@ -12,7 +12,18 @@ Requirements: Crystal 1.22.1, PostgreSQL 17 (validated), Docker for the supplied
 6. Run periodic `sessions.cleanup` and `store.cleanup`. For realtime games run `Fuel::Ticker#advance` from one monotonic scheduler. A capped catch-up discards excess elapsed time rather than executing an unbounded burst.
 7. Serve HTTPS/WSS. Configure connection/header/idle limits and trusted reverse-proxy policy at the application boundary. Forwarded IP headers are not trusted by Fuel.
 
-See [examples/counter.cr](../examples/counter.cr) for working setup and result hooks. To run it in the supplied disposable test environment, use `docker compose run --rm --service-ports test crystal run examples/counter.cr` with `DATABASE_URL`, `FUEL_DEVICE_KEY` and `FUEL_PAIR_KEY` explicitly supplied. No public port is declared by default; map a loopback port deliberately when you need one.
+See [examples/counter.cr](../examples/counter.cr) for working setup and result hooks. For an isolated demo using the disposable test database:
+
+```sh
+docker compose -p fuel-demo run --rm -p 127.0.0.1:8080:8080 \\
+  -e DATABASE_URL=postgres://fuel:fuel_test@db:5432/fuel_test \\
+  -e FUEL_DEVICE_KEY=development-only-device-key-do-not-use-for-real-accounts \\
+  -e FUEL_PAIR_KEY=development-only-transfer-key-do-not-use-for-real-accounts \\
+  test crystal run examples/counter.cr
+docker compose -p fuel-demo down
+```
+
+These public demo credentials are only for the disposable database. Real accounts require privately generated stable keys. The port binds only to loopback; use HTTPS before connecting browsers.
 
 ## Result hook
 

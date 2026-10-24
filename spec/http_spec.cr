@@ -31,6 +31,23 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
         activated.status_code.should eq(200)
         JSON.parse(activated.body)["data"]["account_id"].as_s.should eq(owner_account)
         store.db.query_one("SELECT count(*) FROM fuel_accounts WHERE ns=$1 AND id=$2", store.namespace, old_account, as: Int64).should eq(1)
+        active_cookie = activated.headers.get("Set-Cookie").find { |value| value.starts_with?("__Host-fuel=") }.not_nil!.split(';').first
+        previous_cookie = activated.headers.get("Set-Cookie").find { |value| value.starts_with?("__Host-fuel-previous=") }.not_nil!.split(';').first
+        headers["Cookie"] = "#{active_cookie}; #{previous_cookie}; #{candidate_cookie}"
+        repeated = client.post("/fuel/v1/auth/pair/activate", headers, "{}")
+        repeated.status_code.should eq(200)
+        repeated.headers.get("Set-Cookie").none? { |value| value.starts_with?("__Host-fuel-previous=") }.should be_true
+        next_candidate = client.get("/fuel/v1/auth/pair/prepare", headers).headers["Set-Cookie"].split(';').first
+        next_candidate.should_not eq(candidate_cookie)
+        third = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+        third_account = store.bootstrap(third, "test")
+        next_pair = store.issue_pair(third)
+        headers["Cookie"] = "#{active_cookie}; #{previous_cookie}; #{next_candidate}"
+        next_request = client.post("/fuel/v1/auth/pair/request", headers, {code: next_pair["code"]}.to_json)
+        next_request.status_code.should eq(200)
+        store.approve_pair(third, JSON.parse(next_request.body)["data"]["id"].as_s)
+        final = client.post("/fuel/v1/auth/pair/activate", headers, "{}")
+        JSON.parse(final.body)["data"]["account_id"].as_s.should eq(third_account)
       ensure
         client.close
         server.close

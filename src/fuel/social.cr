@@ -98,6 +98,17 @@ module Fuel
       end
     end
 
+    def remove_account(actor : String)
+      @mutex.synchronize do
+        @history.reject! do |channel, entries|
+          parsed = JSON.parse(channel)
+          private_with_actor = parsed[0] == "private" && parsed[1].as_a.any? { |id| id == actor }
+          entries.reject! { |entry| entry["actor"] == actor }
+          private_with_actor || entries.empty?
+        end
+      end
+    end
+
     private def authorize(actor, kind, target)
       Fuel.check(["global", "session", "guild", "private"].includes?(kind), "invalid_channel")
       Fuel.check(target.bytesize <= 100 && actor != target, "invalid_channel")
@@ -105,7 +116,7 @@ module Fuel
     end
 
     private def key(actor, kind, target) : String
-      {kind, kind == "private" ? [actor, target].sort.join(':') : target}.to_json
+      {kind, kind == "private" ? Fuel.json([actor, target].sort) : Fuel.json(target)}.to_json
     end
 
     private def cleanup

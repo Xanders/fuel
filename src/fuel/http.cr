@@ -33,6 +33,17 @@ module Fuel
       if ["/fuel/v1/auth/prepare", "/fuel/v1/auth/pair/prepare"].includes?(path) && context.request.method == "GET"
         slot = path.ends_with?("pair/prepare") ? "__Host-fuel-candidate" : "__Host-fuel"
         credential = read_credential(context, slot) || Credential.new(Fuel.id, Random::Secure.hex(32))
+        if slot == "__Host-fuel-candidate"
+          renew = context.request.query_params["new"]? == "true"
+          begin
+            status = @store.pair_status(credential)["status"].as_s
+            retained = [read_credential(context).try(&.id), read_credential(context, "__Host-fuel-previous").try(&.id)]
+            renew ||= ["expired", "cancelled"].includes?(status) || status == "linked" && retained.includes?(credential.id)
+          rescue error : Fuel::Error
+            raise error unless ["unauthorized", "invalid_code"].includes?(error.code)
+          end
+          credential = Credential.new(Fuel.id, Random::Secure.hex(32)) if renew
+        end
         cookie(context, credential, slot)
         reply(context, Fuel.json({status: "prepared"}))
         return
@@ -40,6 +51,7 @@ module Fuel
       candidate_path = ["/fuel/v1/auth/pair/request", "/fuel/v1/auth/pair/status", "/fuel/v1/auth/pair/activate"].includes?(path)
       slot = candidate_path ? "__Host-fuel-candidate" : "__Host-fuel"
       credential = read_credential(context, slot) || raise Error.new("unauthorized")
+      data = context.request.method == "POST" ? body(context) : JSON.parse("{}")
       if path == "/fuel/v1/auth/pair/activate" && context.request.method == "POST"
         account = @store.authenticate(credential)
         if previous = read_credential(context)
@@ -60,7 +72,6 @@ module Fuel
         stream(context, credential)
         return
       end
-      data = context.request.method == "POST" ? body(context) : JSON.parse("{}")
       address = context.request.remote_address
       source = address.is_a?(Socket::IPAddress) ? address.address : "unknown"
       result = if path == "/fuel/v1/auth/bootstrap" && context.request.method == "POST"
@@ -125,6 +136,7 @@ module Fuel
         account = @store.authenticate(credential)
         @store.delete_account(credential, data["confirmed"].as_bool) { |c, owner| @deletion_hook.try(&.call(c, owner)) }
         @sessions.remove_account(account)
+        @chat.remove_account(account)
         return Fuel.json({status: "deleted"})
       elsif method == "POST" && path == "analytics/enabled"
         analytics = @analytics || raise Error.new("not_configured")

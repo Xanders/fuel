@@ -56,6 +56,7 @@ module Fuel
     @results = {} of String => GameResult
     @settled = Set(String).new
     @ended = false
+    @started = false
     @mutex = Mutex.new
 
     def initialize(@rules : Rules, owner : String, @mode : String, @capacity : Int32, @public : Bool, @receipt_limit = 256, @late_join = true)
@@ -74,8 +75,9 @@ module Fuel
       @mutex.synchronize do
         Fuel.check(!@ended, "session_ended")
         additions = actors.uniq.reject { |a| @members.includes?(a) }
-        Fuel.check(@late_join || @revision == 0, "not_joinable")
+        Fuel.check(@late_join || !@started, "not_joinable")
         Fuel.check(@members.size + additions.size <= @capacity, "full")
+        Fuel.check(@view_revisions.size + additions.count { |a| !@view_revisions.has_key?(a) } <= 1024, "capacity")
         @members.concat(additions)
         additions.each { |actor| remember(actor) }
       end
@@ -89,7 +91,6 @@ module Fuel
         @sequences.delete(actor)
         @ready.delete(actor)
         @visible.delete(actor)
-        @view_revisions.delete(actor)
         @results.delete(actor)
         @settled.delete(actor)
         @ended = true if @members.empty?
@@ -102,13 +103,14 @@ module Fuel
         unless @ready.includes?(actor)
           @ready.add(actor)
           @view_revisions.each_key { |member| @view_revisions[member] += 1 }
+          @started = true if @members.size == @capacity && @ready.size == @capacity
         end
       end
     end
 
     def listing : JSON::Any?
       @mutex.synchronize do
-        if @public && !@ended && @members.size < @capacity && (@late_join || @revision == 0)
+        if @public && !@ended && @members.size < @capacity && (@late_join || !@started)
           Fuel.json({id: @id, mode: @mode, capacity: @capacity, players: @members.size})
         end
       end
@@ -136,6 +138,7 @@ module Fuel
         Fuel.check(revision == @view_revisions[actor], "revision_conflict")
         Fuel.check(!@results.has_key?(actor), "session_ended")
         @state = @rules.apply(JSON.parse(@state.to_json), actor, action)
+        @started = true
         @revision += 1
         changed(actor)
         freeze_results
@@ -161,6 +164,7 @@ module Fuel
         Fuel.check(sequence >= 0 && sequence > @sequences[actor], "stale_input")
         Fuel.check(!@results.has_key?(actor), "session_ended")
         @state = @rules.apply(JSON.parse(@state.to_json), actor, action)
+        @started = true
         @sequences[actor] = sequence
         @revision += 1
         changed(actor)
@@ -171,7 +175,7 @@ module Fuel
 
     def tick(dt : Time::Span)
       @mutex.synchronize do
-        return if @ended
+        return if @ended || !@started
         @state = @rules.tick(JSON.parse(@state.to_json), dt)
         @revision += 1
         changed
@@ -181,6 +185,14 @@ module Fuel
 
     def pending_result? : Bool
       @mutex.synchronize { @results.keys.any? { |actor| !@settled.includes?(actor) } }
+    end
+
+    def finished? : Bool
+      @mutex.synchronize { @ended || !@members.empty? && @members.all? { |a| @results.has_key?(a) } }
+    end
+
+    def disposable? : Bool
+      @mutex.synchronize { @ended && @results.keys.none? { |a| !@settled.includes?(a) } }
     end
 
     def persist_result(store : Store, credential : Credential, analytics : Questmetry? = nil)
@@ -219,7 +231,7 @@ module Fuel
     end
 
     private def remember(actor : String)
-      @view_revisions[actor] = 0_i64
+      @view_revisions[actor] = @view_revisions.has_key?(actor) ? @view_revisions[actor] + 1 : 0_i64
       @visible[actor] = @rules.project(JSON.parse(@state.to_json), actor).to_json
     end
 
@@ -233,6 +245,7 @@ module Fuel
   end
 
   class Sessions
+    record MatchOutcome, reply : JSON::Any, party : Array(String), capacity : Int32, created_at : Time::Instant
     @rooms = {} of String => Room
     @tickets = {} of Tuple(String, String) => JSON::Any
     @parties = {} of Tuple(String, String) => Array(String)
@@ -240,6 +253,8 @@ module Fuel
     @ticket_capacity = {} of Tuple(String, String) => Int32
     @ticket_generation = {} of Tuple(String, String) => String
     @cancelled = {} of Tuple(String, String, String) => Time::Instant
+    @matched = {} of Tuple(String, String, String) => MatchOutcome
+    @playing = {} of String => String
     @mutex = Mutex.new
 
     def initialize(@rules : Rules, @max_rooms = 1000, @max_tickets = 2000, @ttl = 6.hours, @ticket_ttl = 5.minutes)
@@ -290,25 +305,50 @@ module Fuel
       Fuel.check(!actors.empty? && actors.uniq == actors && (2..32).includes?(capacity) && actors.size <= capacity, "invalid_party")
       @mutex.synchronize do
         key = {actors.first, mode}
+        if outcome = @matched[{actors.first, mode, generation}]?
+          Fuel.check(outcome.party == actors && outcome.capacity == capacity, "conflict")
+          return outcome.reply
+        end
         if prior = @tickets[key]?
           Fuel.check(@parties[key] == actors && @ticket_capacity[key] == capacity && @ticket_generation[key] == generation, "conflict")
           return prior
         end
         Fuel.check(actors.none? { |actor| @cancelled.has_key?({actor, mode, generation}) }, "match_cancelled")
+        actors.each do |actor|
+          if playing = @playing[actor]?
+            room = @rooms[playing]?
+            Fuel.check(room.nil? || room.finished? || !room.member?(actor), "conflict")
+            @playing.delete(actor)
+          end
+        end
         Fuel.check(@tickets.keys.none? { |k| actors.includes?(k[0]) }, "conflict")
         Fuel.check(@tickets.size + actors.size <= @max_tickets, "capacity")
-        waiting = @tickets.find { |k, v| k[1] == mode && v["status"] == "waiting" && @ticket_capacity[k] == capacity && @parties[k].size + actors.size == capacity }
-        if waiting
-          members = @parties[waiting[0]] + actors
+        members = actors.dup
+        @tickets.each_key do |k|
+          party = @parties[k]
+          if k[1] == mode && k[0] == party.first && @ticket_capacity[k] == capacity && members.size + party.size <= capacity
+            members.concat(party)
+          end
+          break if members.size == capacity
+        end
+        if members.size == capacity
+          Fuel.check(@matched.size + members.size <= @max_tickets, "capacity")
           room = create_unlocked(members.first, mode, capacity, false, false)
           room.join(members)
           result = Fuel.json({status: "matched", session_id: room.id})
-          members.each { |a| @tickets[{a, mode}] = result }
-        else
-          actors.each { |a| @tickets[{a, mode}] = Fuel.json({status: "waiting"}) }
+          members.each do |a|
+            k = {a, mode}
+            member_generation = @ticket_generation[k]? || generation
+            party = @parties[k]? || actors
+            @matched[{a, mode, member_generation}] = MatchOutcome.new(result, party.dup, capacity, Time.instant)
+            @playing[a] = room.id
+            forget_ticket(k)
+          end
+          return result
         end
         actors.each do |a|
           k = {a, mode}
+          @tickets[k] = Fuel.json({status: "waiting"})
           @parties[k] = actors.dup
           @ticket_capacity[k] = capacity
           @ticket_created[k] = Time.instant
@@ -323,8 +363,9 @@ module Fuel
       Fuel.key(generation)
       @mutex.synchronize do
         key = {actor, mode}
-        prior = @tickets[key]?
-        return prior if prior && @ticket_generation[key]? == generation && prior["status"] == "matched"
+        if outcome = @matched[{actor, mode, generation}]?
+          return outcome.reply
+        end
         cancel_key = {actor, mode, generation}
         Fuel.check(@cancelled.has_key?(cancel_key) || @cancelled.size < @max_tickets, "capacity")
         @cancelled[cancel_key] = Time.instant
@@ -339,7 +380,9 @@ module Fuel
 
     def remove_account(actor : String)
       @mutex.synchronize do
-        @tickets.keys.select { |k| k[0] == actor }.each { |k| forget_ticket(k) }
+        @tickets.keys.select { |k| k[0] == actor }.each { |k| cancel_party(k) }
+        @playing.delete(actor)
+        @matched.reject! { |k, _| k[0] == actor }
         @rooms.each_value { |r| r.leave(actor, force: true) }
       end
     end
@@ -347,14 +390,16 @@ module Fuel
     def cleanup
       @mutex.synchronize do
         @cancelled.reject! { |_, created| Time.instant - created >= @ticket_ttl }
-        expired = @rooms.select { |_, r| Time.instant - r.created_at >= @ttl && !r.pending_result? }.keys
+        @matched.reject! { |_, outcome| Time.instant - outcome.created_at >= @ticket_ttl }
+        expired = @rooms.select { |_, r| r.disposable? || Time.instant - r.created_at >= @ttl && !r.pending_result? }.keys
         expired.each { |id| @rooms.delete(id) }
         @tickets.keys.each do |key|
-          ticket = @tickets[key]
-          if ticket["status"] == "matched" ? expired.includes?(ticket["session_id"].as_s) : Time.instant - @ticket_created[key] >= @ticket_ttl
-            forget_ticket(key)
+          next unless @tickets.has_key?(key)
+          if Time.instant - @ticket_created[key] >= @ticket_ttl
+            cancel_party(key)
           end
         end
+        @playing.reject! { |actor, id| !@rooms.has_key?(id) || !@rooms[id].member?(actor) }
       end
     end
 
@@ -366,11 +411,22 @@ module Fuel
       @ticket_generation.delete(key)
     end
 
+    private def cancel_party(key)
+      (@parties[key]? || [key[0]]).dup.each do |actor|
+        k = {actor, key[1]}
+        if generation = @ticket_generation[k]?
+          @cancelled[{actor, key[1], generation}] = Time.instant
+        end
+        forget_ticket(k)
+      end
+    end
+
     def tick(dt : Time::Span)
       @mutex.synchronize { @rooms.values.dup }.each { |room| room.tick(dt) }
     end
 
     private def create_unlocked(actor, mode, capacity, public, late_join) : Room
+      @rooms.reject! { |_, room| room.disposable? }
       Fuel.check(@rooms.size < @max_rooms, "capacity")
       Fuel.check(@rooms.values.count { |r| r.member?(actor) } < 8, "capacity")
       8.times do
