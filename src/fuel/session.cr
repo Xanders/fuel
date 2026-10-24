@@ -269,17 +269,19 @@ module Fuel
     end
 
     def join(actor : String, id : String) : Room
-      room = get(id)
-      room.join([actor])
-      room
+      @mutex.synchronize do
+        room = @rooms[id]? || raise Error.new("session_lost")
+        join_unlocked(actor, room)
+      end
     end
 
     def join_code(actor : String, value : String) : Room
       code = Invite.normalize(value)
-      room = @mutex.synchronize { @rooms.values.find { |r| r.code == code && Time.instant - r.created_at < 5.minutes } }
-      raise Error.new("invalid_code") unless room
-      room.join([actor])
-      room
+      @mutex.synchronize do
+        room = @rooms.values.find { |r| r.code == code && Time.instant - r.created_at < 5.minutes }
+        raise Error.new("invalid_code") unless room
+        join_unlocked(actor, room)
+      end
     end
 
     def list(mode : String) : Array(JSON::Any)
@@ -342,6 +344,7 @@ module Fuel
         members = actors + (combinations[needed]? || [] of Array(String)).flatten
         if members.size == capacity
           Fuel.check(@matched.size + members.size <= @max_tickets, "capacity")
+          members.each { |actor| check_admission(actor) }
           room = create_unlocked(members.first, mode, capacity, false, false)
           room.join(members)
           result = Fuel.json({status: "matched", session_id: room.id})
@@ -437,7 +440,7 @@ module Fuel
     private def create_unlocked(actor, mode, capacity, public, late_join) : Room
       @rooms.reject! { |_, room| room.disposable? }
       Fuel.check(@rooms.size < @max_rooms, "capacity")
-      Fuel.check(@rooms.values.count { |r| r.member?(actor) } < 8, "capacity")
+      check_admission(actor)
       8.times do
         room = Room.new(@rules, actor, mode, capacity, public, late_join: late_join)
         next if @rooms.values.any? { |r| r.code == room.code }
@@ -445,6 +448,17 @@ module Fuel
         return room
       end
       raise Error.new("capacity")
+    end
+
+    private def check_admission(actor : String)
+      Fuel.check(@rooms.values.count { |r| r.member?(actor) } < 8, "capacity")
+    end
+
+    private def join_unlocked(actor : String, room : Room) : Room
+      return room if room.member?(actor)
+      check_admission(actor)
+      room.join([actor])
+      room
     end
   end
 

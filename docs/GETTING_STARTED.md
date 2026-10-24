@@ -15,10 +15,10 @@ Requirements: Crystal 1.22.1, PostgreSQL 17 (validated), Docker for the supplied
 See [examples/counter.cr](../examples/counter.cr) for working setup and result hooks. For an isolated demo using the disposable test database:
 
 ```sh
-docker compose -p fuel-demo run --rm -p 127.0.0.1:8080:8080 \\
-  -e DATABASE_URL=postgres://fuel:fuel_test@db:5432/fuel_test \\
-  -e FUEL_DEVICE_KEY=development-only-device-key-do-not-use-for-real-accounts \\
-  -e FUEL_PAIR_KEY=development-only-transfer-key-do-not-use-for-real-accounts \\
+docker compose -p fuel-demo run --rm -p 127.0.0.1:8080:8080 \
+  -e DATABASE_URL=postgres://fuel:fuel_test@db:5432/fuel_test \
+  -e FUEL_DEVICE_KEY=development-only-device-key-do-not-use-for-real-accounts \
+  -e FUEL_PAIR_KEY=development-only-transfer-key-do-not-use-for-real-accounts \
   test crystal run examples/counter.cr
 docker compose -p fuel-demo down
 ```

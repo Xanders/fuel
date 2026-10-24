@@ -1,6 +1,32 @@
 require "./spec_helper"
 
 describe "initial review regressions" do
+  it "limits public and code admission while permitting existing membership retries" do
+    [false, true].each do |by_code|
+      sessions = Fuel::Sessions.new(CounterRules.new)
+      owned = Array.new(8) { sessions.create("alice", "duel", 2, true) }
+      extra = sessions.create("bob", "duel", 2, true)
+      expect_raises(Fuel::Error, "capacity") do
+        by_code ? sessions.join_code("alice", extra.code) : sessions.join("alice", extra.id)
+      end
+      extra.member?("alice").should be_false
+      sessions.join("alice", owned.first.id).should eq(owned.first)
+      sessions.join_code("alice", owned.first.code).should eq(owned.first)
+    end
+  end
+
+  it "checks queued non-owner admission before allocating a match room" do
+    sessions = Fuel::Sessions.new(CounterRules.new)
+    owned = Array.new(7) { sessions.create("alice", "duel") }
+    sessions.match("alice", "duel")
+    sessions.create("alice", "duel")
+    expect_raises(Fuel::Error, "capacity") { sessions.match("bob", "duel") }
+    owned.first.leave("alice")
+    result = sessions.match("bob", "duel")
+    result["status"].as_s.should eq("matched")
+    sessions.get(result["session_id"].as_s).member?("alice").should be_true
+  end
+
   it "packs compatible parties without a small head-of-line party blocking them" do
     sessions = Fuel::Sessions.new(CounterRules.new)
     sessions.match_party(["single"], "coop", 4)
