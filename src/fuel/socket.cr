@@ -201,6 +201,7 @@ module Fuel
     getter? admitted = false
     @queue = Deque(Tuple(UInt8, String)).new
     @closing = false
+    @output_ready = false
     @wake = Channel(Nil).new(1)
     @stopped = Channel(Nil).new
     @protocol : HTTP::WebSocket::Protocol
@@ -270,22 +271,25 @@ module Fuel
         begin
           next_snapshot = Time.instant
           until @closed
-            if packet = @queue.shift?
-              if packet[0] == 8
-                @protocol.send(packet[1].to_slice, HTTP::WebSocket::Protocol::Opcode::CLOSE)
-                close
-                break
-              elsif packet[0] == 10
-                @protocol.pong(packet[1])
-              else
-                peer.send_message(self, packet[1])
+            if packet = @queue.first?
+              if @output_ready || packet[0] >= 8
+                @queue.shift
+                if packet[0] == 8
+                  @protocol.send(packet[1].to_slice, HTTP::WebSocket::Protocol::Opcode::CLOSE)
+                  close
+                  break
+                elsif packet[0] == 10
+                  @protocol.pong(packet[1])
+                else
+                  peer.send_message(self, packet[1])
+                end
               end
             end
-            if @admitted && !@closing && Time.instant >= next_snapshot
+            if @output_ready && !@closing && Time.instant >= next_snapshot
               peer.send_snapshot(self)
               next_snapshot = Time.instant + @interval
             end
-            next unless @queue.empty?
+            next if @output_ready && !@queue.empty?
             select
             when @wake.receive?
             when timeout(@interval)
@@ -300,6 +304,7 @@ module Fuel
       begin
         writer_finished = false
         peer.start(self)
+        @output_ready = @admitted && !@closed
         reader = SocketFrames.new(@io, @message_limit)
         until @closed
           raw = reader.receive do |opcode, payload|
@@ -325,6 +330,7 @@ module Fuel
           end
           check_open
           peer.message(self, raw)
+          @output_ready = @admitted && !@closed
         end
       rescue
         # Malformed input, revocation and failed IO all detach the same owner.

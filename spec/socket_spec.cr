@@ -118,7 +118,77 @@ class SocketTestPeer < Fuel::SocketPeer
   end
 end
 
+class AwaitedSetupPeer < SocketTestPeer
+  getter entered = Channel(Nil).new(1)
+  getter? setup_done = false
+  getter? early_snapshot = false
+
+  def initialize(@native : Bool)
+  end
+
+  def start(socket : Fuel::SocketConnection) : Nil
+    setup(socket) unless @native
+  end
+
+  def message(socket : Fuel::SocketConnection, raw : String) : Nil
+    setup(socket)
+  end
+
+  private def setup(socket)
+    socket.admit("account")
+    @entered.send(nil)
+    sleep 20.milliseconds
+    socket.check_open
+    @setup_done = true
+  end
+
+  def send_snapshot(socket : Fuel::SocketConnection) : Nil
+    unless @setup_done
+      @early_snapshot = true
+      raise "snapshot before setup"
+    end
+    super
+  end
+end
+
 describe Fuel::SocketServer do
+  [false, true].each do |native|
+    it "waits for #{native ? "native authentication" : "initial"} post-admission setup before output" do
+      sockets = Fuel::SocketServer.new([] of String, interval: 1.millisecond)
+      peer = AwaitedSetupPeer.new(native)
+      server = HTTP::Server.new do |context|
+        sockets.upgrade(context) { |_| peer.as(Fuel::SocketPeer) }
+      end
+      address = server.bind_tcp("127.0.0.1", 0)
+      spawn { server.listen }
+      socket = HTTP::WebSocket.new(address.address, "/socket", address.port)
+      received = Channel(String).new(32)
+      socket.on_message { |raw| received.send(raw) }
+      spawn { socket.run }
+      begin
+        socket.send("{}") if native
+        select
+        when peer.entered.receive
+        when timeout(1.second)
+          fail "setup did not start"
+        end
+        sleep 40.milliseconds
+        peer.early_snapshot?.should be_false
+        peer.setup_done?.should be_true
+        select
+        when raw = received.receive
+          raw.should eq(%({"snapshot":true}))
+        when timeout(1.second)
+          fail "ready setup did not receive a snapshot"
+        end
+      ensure
+        socket.close
+        100.times { break if sockets.budget.active == 0; sleep 1.millisecond }
+        sockets.budget.active.should eq(0)
+        server.close
+      end
+    end
+  end
   it "closes an overflowing reliable queue and frees only its own permit" do
     server = Fuel::SocketServer.new([] of String)
     io = StalledSocketIO.new
