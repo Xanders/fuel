@@ -15,16 +15,28 @@ describe "initial review regressions" do
     end
   end
 
-  it "checks queued non-owner admission before allocating a match room" do
+  it "skips temporarily inadmissible queued parties without blocking other matches" do
     sessions = Fuel::Sessions.new(CounterRules.new)
     owned = Array.new(7) { sessions.create("alice", "duel") }
     sessions.match("alice", "duel")
     sessions.create("alice", "duel")
-    expect_raises(Fuel::Error, "capacity") { sessions.match("bob", "duel") }
+    sessions.match("bob", "duel")["status"].as_s.should eq("waiting")
+    other = sessions.match("carol", "duel")
+    other["status"].as_s.should eq("matched")
+    sessions.get(other["session_id"].as_s).member?("alice").should be_false
     owned.first.leave("alice")
-    result = sessions.match("bob", "duel")
+    result = sessions.match("dave", "duel")
     result["status"].as_s.should eq("matched")
     sessions.get(result["session_id"].as_s).member?("alice").should be_true
+  end
+
+  it "does not enqueue an incoming player already at room capacity" do
+    sessions = Fuel::Sessions.new(CounterRules.new)
+    8.times { sessions.create("alice", "duel") }
+    expect_raises(Fuel::Error, "capacity") { sessions.match("alice", "duel") }
+    sessions.match("bob", "duel")["status"].as_s.should eq("waiting")
+    result = sessions.match("carol", "duel")
+    sessions.get(result["session_id"].as_s).member?("alice").should be_false
   end
 
   it "packs compatible parties without a small head-of-line party blocking them" do

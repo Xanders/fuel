@@ -323,6 +323,7 @@ module Fuel
             @playing.delete(actor)
           end
         end
+        actors.each { |actor| check_admission(actor) }
         Fuel.check(@tickets.keys.none? { |k| actors.includes?(k[0]) }, "conflict")
         Fuel.check(@tickets.size + actors.size <= @max_tickets, "capacity")
         # Keep parties intact, but skip an earlier party when another combination
@@ -331,7 +332,7 @@ module Fuel
         combinations = {0 => [] of Array(String)}
         @tickets.each_key do |k|
           party = @parties[k]
-          if k[1] == mode && k[0] == party.first && @ticket_capacity[k] == capacity
+          if k[1] == mode && k[0] == party.first && @ticket_capacity[k] == capacity && party.all? { |member| can_admit?(member) }
             combinations.keys.sort.reverse_each do |size|
               total = size + party.size
               if total <= needed && !combinations.has_key?(total)
@@ -451,7 +452,11 @@ module Fuel
     end
 
     private def check_admission(actor : String)
-      Fuel.check(@rooms.values.count { |r| r.member?(actor) } < 8, "capacity")
+      Fuel.check(can_admit?(actor), "capacity")
+    end
+
+    private def can_admit?(actor : String) : Bool
+      @rooms.values.count { |r| r.member?(actor) } < 8
     end
 
     private def join_unlocked(actor : String, room : Room) : Room
