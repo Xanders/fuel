@@ -5,7 +5,7 @@ module Fuel
   class Handler
     include HTTP::Handler
     @polls = Set(String).new
-    @sockets = 0
+    @sockets : SocketServer
     @mutex = Mutex.new
     getter chat : Chat
 
@@ -13,6 +13,7 @@ module Fuel
                    censor = Censor.new([] of String), persisted_chat = [] of String,
                    @guild_access : Proc(String, String, Bool) = ->(actor : String, guild : String) { false },
                    @deletion_hook : Proc(DB::Connection, String, Nil)? = nil)
+      @sockets = SocketServer.new(@origins)
       @chat = Chat.new(censor: censor, store: @store, persist: persisted_chat) do |actor, kind, target|
         kind == "global" || (kind == "session" && @sessions.get(target).member?(actor)) || (kind == "guild" && @guild_access.call(actor, target))
       end
@@ -262,71 +263,9 @@ module Fuel
     end
 
     private def stream(context, credential)
-      Fuel.check(context.request.method == "GET" && context.request.headers["Upgrade"]?.try(&.downcase) == "websocket", "invalid_request")
       session = context.request.query_params["session_id"]
-      actor = @store.authenticate(credential)
-      room = @sessions.get(session)
-      generation = room.connect(actor)
-      key = context.request.headers["Sec-WebSocket-Key"]? || raise Error.new("invalid_request")
-      Fuel.check(context.request.headers["Sec-WebSocket-Version"]? == "13", "unsupported_version")
-      @mutex.synchronize { Fuel.check(@sockets < 128, "capacity"); @sockets += 1 }
-      context.response.status_code = 101
-      context.response.headers["Upgrade"] = "websocket"
-      context.response.headers["Connection"] = "Upgrade"
-      context.response.headers["Sec-WebSocket-Accept"] = HTTP::WebSocket::Protocol.key_challenge(key)
-      context.response.upgrade do |io|
-        io.read_timeout = 30.seconds if io.responds_to?(:read_timeout=)
-        io.write_timeout = 3.seconds if io.responds_to?(:write_timeout=)
-        protocol = HTTP::WebSocket::Protocol.new(io, sync_close: false)
-        lock = Mutex.new
-        closed = false
-        spawn do
-          begin
-            until closed
-              @store.with_actor(credential) do |_, verified|
-                state = room.snapshot(verified, generation)
-                lock.synchronize { protocol.send({wire_version: 1, generation: generation, data: state}.to_json) }
-              end
-              room.persist_result(@store, credential, @analytics)
-              sleep 100.milliseconds
-            end
-          rescue
-            io.close
-          end
-        end
-        begin
-          buffer = Bytes.new(4096)
-          message = IO::Memory.new
-          loop do
-            frame = protocol.receive(buffer)
-            case frame.opcode
-            when .close?
-              break
-            when .ping?
-              lock.synchronize { protocol.pong(String.new(buffer[0, frame.size])) }
-            when .text?
-              Fuel.check(message.size + frame.size <= 16384, "too_large")
-              message.write(buffer[0, frame.size])
-              if frame.final
-                data = JSON.parse(message.to_s)
-                message.clear
-                Fuel.check(data["epoch"].as_s == room.epoch, "session_lost")
-                @store.with_actor(credential) do |_, verified|
-                  @store.limit("input:#{verified}", 120, 1)
-                  room.input(verified, generation, data["sequence"].as_s.to_i64, data["action"])
-                end
-              end
-            else
-              raise Error.new("invalid_request")
-            end
-          end
-        rescue
-          # Malformed/oversized input and revocation close the connection.
-        ensure
-          closed = true
-          io.close
-          @mutex.synchronize { @sockets -= 1 }
-        end
+      @sockets.upgrade(context) do |_|
+        SessionSocketPeer.new(@store, @sessions, credential, session, @sockets.limiter, @analytics).as(SocketPeer)
       end
     end
   end

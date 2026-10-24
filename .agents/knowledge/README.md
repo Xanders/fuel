@@ -5,3 +5,4 @@
 - [Social contracts](../../docs/SOCIAL.md) → social.cr and questmetry.cr → social/analytics specs.
 - [Deliberate limits and future work](../../docs/ROADMAP.md).
 - [Safe incremental adoption](../../docs/MIGRATION.md).
+- [Compatible transport and authority boundaries](../../docs/TRANSPORT.md) → socket.cr/session_socket.cr → socket/socket_http specs; shared with the companion SDK transports.

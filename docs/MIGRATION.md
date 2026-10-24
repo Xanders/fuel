@@ -11,3 +11,5 @@ Existing games should migrate one shared subsystem at a time. This guide does no
 7. Pilot one game and one subsystem before widening adoption. Record the actual integration glue and operations needed; no percentage reduction is promised in advance.
 
 When a shared feature is missing or awkward, open an issue/feature request in Fuel and notify the maintainer listed in CODEOWNERS. A consumer is not required to implement a framework PR. Avoid local workaround copies of auth, matchmaking, retries or persistence that diverge from the common contract.
+
+For an existing realtime wire protocol, the shared [transport adapter](TRANSPORT.md) and SDK transport engines provide an adoption boundary. Both canonical and compatible routes use the same engine. Keep the existing account/storage/rules contracts explicit; importing transport does not complete their migration. Reliable event queues, fresh physical-send authorization and lifetime/identity/request fences are acceptance requirements.

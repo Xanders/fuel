@@ -7,6 +7,7 @@
 | Sessions | Bounded room registry, codes, public listing, matching and trusted parties |
 | Store | PostgreSQL identity, device transfer, progress, result receipts, leaderboard, ratings, rate counters, optional chat and analytics outbox |
 | Handler | HTTP/long-poll/WebSocket boundary, cookie/header authentication, Origin checks, input bounds and revalidation |
+| SocketServer | Shared bounded frames, peer admission, ordered delivery and cleanup for canonical and compatible wire adapters; see [transport contracts](TRANSPORT.md) |
 | Optional Questmetry | Allowlisted product events, pseudonyms, transactional enqueue and bounded retry |
 | Dart / Flutter / Flame | Networking and recovery / platform lifecycle / presentation |
 

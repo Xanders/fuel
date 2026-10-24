@@ -12,7 +12,7 @@ Choose one shared subsystem and write a failing acceptance fixture before replac
 
 For a new game implement Rules initial/apply/project and optional result/tick, instantiate Store/Sessions/Handler, then run the complete start/action/result plus disconnect/retry scenario against a disposable database. For realtime inputs validate intent in rules and never resend stale movement after reconnect. For device transfer keep the saved candidate, owner phrase confirmation and prior guest separate.
 
-For an existing game use docs/MIGRATION.md. Measure removed common code and new glue separately; do not promise a percentage before a feature-equivalent pilot. Do not change live data, secrets or recovery policy as an incidental library upgrade.
+For an existing game use docs/MIGRATION.md and docs/TRANSPORT.md for a compatible wire adapter. Share the canonical engine and SDK transports; retain the game's identity/schema/rules explicitly. Measure removed common code and all new glue separately; do not promise a percentage before a feature-equivalent pilot. Do not change live data, secrets or recovery policy as an incidental library upgrade.
 
 When the public interface lacks a common feature, create a Fuel issue/feature request and notify the maintainer in CODEOWNERS. Do not implement a local workaround copy or require the consumer to submit a framework PR.
 
