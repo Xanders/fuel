@@ -1,0 +1,8 @@
+name: fuel
+version: 0.1.0
+crystal: ">= 1.22.1, < 1.23.0"
+license: MIT
+dependencies:
+  pg:
+    github: will/crystal-pg
+    version: 0.31.0
