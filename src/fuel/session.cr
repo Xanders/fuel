@@ -323,14 +323,23 @@ module Fuel
         end
         Fuel.check(@tickets.keys.none? { |k| actors.includes?(k[0]) }, "conflict")
         Fuel.check(@tickets.size + actors.size <= @max_tickets, "capacity")
-        members = actors.dup
+        # Keep parties intact, but skip an earlier party when another combination
+        # can fill the room. Capacity bounds this subset search to 33 states.
+        needed = capacity - actors.size
+        combinations = {0 => [] of Array(String)}
         @tickets.each_key do |k|
           party = @parties[k]
-          if k[1] == mode && k[0] == party.first && @ticket_capacity[k] == capacity && members.size + party.size <= capacity
-            members.concat(party)
+          if k[1] == mode && k[0] == party.first && @ticket_capacity[k] == capacity
+            combinations.keys.sort.reverse_each do |size|
+              total = size + party.size
+              if total <= needed && !combinations.has_key?(total)
+                combinations[total] = combinations[size] + [party]
+              end
+            end
           end
-          break if members.size == capacity
+          break if combinations.has_key?(needed)
         end
+        members = actors + (combinations[needed]? || [] of Array(String)).flatten
         if members.size == capacity
           Fuel.check(@matched.size + members.size <= @max_tickets, "capacity")
           room = create_unlocked(members.first, mode, capacity, false, false)

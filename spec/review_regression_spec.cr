@@ -1,6 +1,16 @@
 require "./spec_helper"
 
 describe "initial review regressions" do
+  it "packs compatible parties without a small head-of-line party blocking them" do
+    sessions = Fuel::Sessions.new(CounterRules.new)
+    sessions.match_party(["single"], "coop", 4)
+    sessions.match_party(["a", "b"], "coop", 4)
+    match = sessions.match_party(["c", "d"], "coop", 4)
+    match["status"].as_s.should eq("matched")
+    room = sessions.get(match["session_id"].as_s)
+    ["a", "b", "c", "d"].each { |actor| room.member?(actor).should be_true }
+    room.member?("single").should be_false
+  end
   it "never reuses a viewer revision after leaving and rejoining" do
     room = Fuel::Room.new(CounterRules.new, "alice", "duel", 2, false, receipt_limit: 1)
     room.join(["bob"])
