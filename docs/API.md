@@ -1,61 +1,76 @@
 # Wire API v1
 
-All paths below have prefix `/fuel/v1/`. Successful responses are `{"wire_version":1,"data":...}`; errors are `{"wire_version":1,"error":"code"}`. Set `X-Fuel-Version: 1`; unsupported versions fail before mutation. Revisions, input sequences, scores, ranks and counts use decimal strings to preserve 64-bit precision on web clients.
+Fuel 0.3 is an experimental API; pin the server and SDK to the same reviewed release. `wire_version: 1` identifies the envelope, not compatibility with every earlier development API. The default prefix is `/fuel/v1`; `Handler(prefix: ...)` and the SDK base URI can select another application prefix.
 
-Native credentials use `Authorization: Fuel <binding-id>:<secret>` over TLS. Browser credentials are host-only Secure HttpOnly SameSite=Strict cookies. Never put credentials into a URL. Mutating cookie requests require an allowed Origin. Deploy same-origin browser API; cross-origin CORS is not supplied.
+Success is `{"wire_version":1,"data":...}` and error is `{"wire_version":1,"error":"code"}`. Send `X-Fuel-Version: 1`. Revisions, sequences, receipt cursors, scores and counts are decimal strings; Unix timestamps are integers. Global operation cursors may have gaps between an account's entries.
 
-| Method | Path | Body / result |
+Native credentials use `Authorization: Fuel <binding-id>:<secret>` over TLS. Browser credentials use namespace-specific host-only Secure HttpOnly SameSite=Strict cookies (current, previous, candidate). Cookie mutations require an exact allowed Origin; deploy browser API same-origin. Credentials never belong in URLs. Authenticated responses include `X-Fuel-Account`; `X-Fuel-Expected-Account` rejects a changed selected account before dispatching an action. Account IDs are public pseudonyms, not authentication.
+
+| Method | Path | Contract |
 |---|---|---|
-| GET | auth/prepare | Prepare a browser cookie before bootstrap; no database account created |
-| POST | auth/bootstrap | Native credential must already be saved; idempotent account creation |
-| GET | auth/bindings | Own bindings only |
-| POST | auth/revoke | `{id}`; revoke one owned binding |
-| POST | auth/delete | `{confirmed:true}`; purge Fuel-owned data, revoke all bindings |
-| POST | auth/pair | Issue six-character five-minute transfer code and operation ID |
-| GET | auth/pair/prepare | Browser candidate cookie separate from current guest |
-| POST | auth/pair/request | `{code}`, authenticated by saved candidate; returns pending ID and phrase, no target account access |
-| GET | auth/pair/pending | Owner sees pending candidate verification phrases |
-| POST | auth/pair/approve | `{id}`; owner approves that exact request |
-| POST | auth/pair/cancel | `{id}`; cancel pending own operation |
-| GET | auth/pair/status | Candidate proof; pending/linked/expired/cancelled |
-| POST | auth/pair/activate | Browser adopts linked candidate, preserves prior guest cookie |
-| POST | auth/switch | Browser returns to prior saved binding |
-| GET | progress | Permanent game-owned JSON progress |
-| POST | sessions | `{mode,capacity,public,late_join}`; session_id, epoch and private code |
-| GET | sessions?mode=duel | Up to 100 public joinable rooms; no codes |
-| POST | join | `{code}` or public `{session_id}`; accepted snapshot |
-| POST | match | `{mode,ticket_id}`; stable ticket generation, waiting or matched/session_id |
-| POST | match/cancel | `{mode,ticket_id}`; cancelled or already-matched outcome |
-| GET | sessions/:id | Current viewer-specific snapshot |
-| POST | sessions/:id/commands | `{id,epoch,revision:"0",action:{...}}`; exact-ID retry |
+| GET | auth/prepare | Prepare a browser proof without creating a database account |
+| POST | auth/bootstrap | Idempotent guest creation/restoration using the saved proof |
+| GET | account | `{account_id,progress,analytics_enabled,analytics_revision,server_time}`; pure game initialization/refresh runs transactionally |
+| POST | actions | `{id,action,payload}`; game public allowlist, atomic permanent action and durable receipt |
+| GET | operations/:id | Own exact durable receipt or `not_found` |
+| GET | operations?after=...&limit=100 | Forward durable history, ascending cursor; without after, latest page in ascending order |
+| GET | operations?terminal=true&limit=1 | Latest terminal summary, even behind newer ordinary operations |
+| GET | auth/bindings | Own bindings, current/revoked flags and created/last-seen metadata |
+| POST | auth/revoke | `{id,confirmed_last:false}`; the last active binding requires explicit confirmation |
+| POST | auth/delete | `{confirmed:true,account_id,proof}`; proof is a saved random 64-hex deletion-operation secret |
+| POST | auth/delete/status | `{account_id,proof}`; narrow `deleted/removed_bindings` or `unknown`, works after login proof removal |
+| POST | auth/pair | Issue ID, six-character code and five-minute expiry interval |
+| GET | auth/pair/issued?id=... | Owner-only status, phrase and Unix expiry |
+| GET | auth/pair/prepare | Browser candidate; `new=true` only deliberately abandons the old attempt |
+| POST | auth/pair/request | `{code}` using candidate proof; pending ID/phrase, no target account access |
+| GET | auth/pair/pending | Owner's pending requests and comparison phrases |
+| POST | auth/pair/approve | `{id}`; owner confirms the displayed exact request |
+| POST | auth/pair/cancel | `{id}`; cancel an own pending request |
+| GET | auth/pair/status | Candidate's pending/linked/expired/cancelled status |
+| GET | auth/selection | Browser current/previous public binding/account metadata and candidate public ID |
+| POST | auth/pair/activate | `{target_id}`; adopt the frozen linked candidate and retain the previous guest |
+| POST | auth/switch | `{from,to}` binding IDs; `from:null` permits selecting a surviving previous proof; repeating an already-selected target does not toggle |
+| POST | sessions | `{mode,capacity,public,late_join}`; ID, epoch and private invite code; configured mode policy owns actual capacity/policy |
+| GET | sessions?mode=... | Up to 100 public joinable rooms, without invite codes |
+| GET | sessions/mine | Current own memberships for unknown admission recovery; never creates a room |
+| POST | join | `{code}` or public `{session_id}`; authoritative viewer snapshot |
+| POST | match | `{mode,ticket_id}`; stable waiting/matched intent |
+| POST | match/cancel | Same mode/ticket ID; cancelled or already-matched outcome |
+| GET | sessions/:id | Viewer-specific full snapshot |
+| POST | sessions/:id/commands | `{id,epoch,revision:"0",action:{...}}`; exact command retry |
 | POST | sessions/:id/ready | Mark this member ready |
-| POST | sessions/:id/leave | Leave; unsettled results must be saved first |
-| GET | sessions/:id/events?epoch=...&cursor=... | Single-flight long poll, up to 15 seconds, returns full snapshot; revalidates access after waits |
-| GET | stream?session_id=... | WebSocket upgrade; authenticated and Origin-checked |
-| POST | chat | `{kind,target,text}` |
-| GET | chat?kind=...&target=... | Bounded authorized history |
-| GET | leaderboards/:board?limit=100 | Best score per player, descending score, earliest achievement then account for ties |
-| GET | ratings/:board?metric=wins&hours=24 | wins, battles or win_ratio; draws count as battles and are excluded from win-ratio denominator |
-| POST | analytics/enabled | `{enabled:false}`; requires configured analytics |
+| POST | sessions/:id/leave | Leave; pending persistent effects/results cannot be discarded |
+| GET | sessions/:id/events?epoch=...&cursor=... | One long poll per binding, up to 15 seconds; revalidates after waits |
+| GET | stream?session_id=...&account_id=... | WebSocket; optional expected public account protects browser selection races |
+| POST | chat | `{kind,target,text}`; authoritative name, membership, censor and bounds |
+| GET | chat?kind=...&target=... | Accessible retained history, excluding muted players |
+| GET | chat/mutes | Own muted players with display names |
+| POST | chat/mute | `{target,muted}` |
+| POST | chat/report | `{kind,target,message_id,reason}`; proof of an accessible retained message, bounded and idempotent |
+| GET | leaderboards/:board?limit=100 | Best authoritative score/player; descending score then earliest achievement/account |
+| GET | ratings/:board?metric=wins&hours=24 | wins, battles or win_ratio; draws count as battles, outside win-ratio denominator |
+| POST | analytics/enabled | `{enabled:false}`; confirmed revision, requires configured analytics |
 
-Snapshots contain `session_id, epoch, revision, state, server_time, last_input, ready`. Socket envelopes additionally contain `generation`; inputs are `{epoch,sequence:"1",action:{...}}`. Inputs are never replayed across reconnect; wait for the new generation and current snapshot. The server sends full snapshots about every 100 ms; a game's tick cadence is separate.
+## Snapshots and receipts
 
-Transfer preparation retains an outstanding candidate for retries. Once the linked candidate is safely retained as active/previous, preparation creates a fresh candidate for the next transfer. Add `?new=true` only for a deliberate new attempt, never as a response to network failure.
+Snapshots contain `session_id,mode,code,epoch,revision,state,server_time,last_input,ready,saving_backlog,effect_error,receipt_cursor,receipt_base,receipts`. The domain `state` is always a private viewer projection. Socket envelopes also carry actual `account_id` and physical `generation`. Inputs are `{epoch,sequence:"1",action:{...}}`; never replay them after reconnect. About ten full snapshots/second are independent of the game's fixed-step tick.
 
-Chat kinds: `global` (instance), `session` (target room ID, membership required), `guild` (target guild ID, callback required), `private` (target recipient account). No account ID in a body grants the sender that identity. Private history keys are canonical participant pairs. Sender/recipient block policies can be added by the application; the default private channel permits messages between authenticated accounts and is not a full moderation system.
+The RAM receipt log contains `{sequence,operation}` entries, bounded by 64 entries and 16 KiB. `receipt_base` identifies its first retained sequence, or cursor+1 when empty. Coalescing snapshots must not be mistaken for complete reliable event delivery. The SDK recovers authoritative operations through durable HTTP history; a large presentation backlog explicitly resynchronizes rather than replaying every old animation.
 
-## Error/recovery contract
+A durable operation contains `operation_id,cursor,source,session_id,epoch,action,occurred_at,committed_at,terminal,reply`. Source is public, effect or internal event. Only trusted Crystal effects can mark a terminal result. Receipts, current progress, score descriptors and optional analytics enqueue commit together. Retry the same ID/action/payload; never install historical reply balances as present progress. Dedupe/history persists until account deletion. History pages have at most 100 entries and 480 KiB; resume at the last returned cursor even when a page is short.
 
-Retain one ticket_id for a matchmaking intent and its cancellation. A cancelled generation is rejected as match_cancelled for the five-minute ticket horizon; create a new ID for a new deliberate attempt. Do not retry old intents after that horizon. An already matched generation continues returning its room even after cancellation races.
+## Recovery and authority
 
-- `unauthorized` / `forbidden`: stop private actions; preserve saved credentials. No automatic new guest.
-- `session_lost`: the session is unavailable in this process; abandon session commands and offer a new session. Persistent progress remains.
-- `session_ended`: stop gameplay inputs.
-- `revision_conflict`: refresh the snapshot; do not silently rebase the old action.
-- `conflict`: an ID was reused with different content.
-- `stale_connection` / `stale_input`: discard old inputs; do not retry them as new actions.
-- `unavailable` / network timeout: outcome may be unknown. Retry the same semantic command/result ID and payload.
-- `rate_limited` / `capacity` / `poll_active`: back off and keep existing identity/session; do not spin new bootstrap requests.
-- `invalid_code`: the same generic outcome covers missing, used and expired codes.
+- `unauthorized/selection_changed`: stop private activity and reconcile the saved identity; never bootstrap a replacement guest automatically.
+- `session_lost/session_ended`: abandon old RAM commands. Offer a deliberate new session; permanent progress and committed receipts remain.
+- `saving_backlog/pending_result`: accepted work remains queued. Pause new play/admission until it settles. A quarantine is visible through effect_error/health and requires fixing its cause.
+- `revision_conflict/conflict`: fetch current state or reconcile the exact original operation. Do not change its ID or silently rebase an uncertain intent.
+- Timeout/unavailable: may have committed. Read the original receipt or retry the exact intent. An aborted client connection does not roll back the server.
+- `rate_limited/capacity/poll_active`: bounded backoff, preserving identity/session.
+- `invalid_code`: generic missing/used/expired-code outcome. Transfer preparation retains its proof through retry; owner phrase confirmation remains mandatory.
 
-Persistent result submission is a trusted Crystal library API, never a public client-score endpoint. `Store#record_result` accepts an optional outcome and transactional effect block. Account IDs are pseudonyms, not authentication secrets. API, rules/payloads and schema versions are separate compatibility concerns.
+Deletion status is retained for 30 days. It reveals only that operation's outcome and removed public binding IDs, never progress or a usable login proof. Retired binding IDs remain tombstoned so an old secret cannot recreate a deleted account. The consumer must include any additional data owners in its transactional purge hook.
+
+Chat kinds are instance-global, session (room membership), guild (application policy callback), private (canonical participant pair). History/persistence are optional per kind. Default private chat permits authenticated accounts to message each other; game-specific consent/block policy and moderation operations remain application policy.
+
+`Runtime` owns server/ticker/effect workers/cleanup and optional analytics delivery. GET `/health` reports database health, admissions, active sessions, in-flight/pending/quarantined work and safe_to_replace. USR1 drains new work; USR2 resumes. Replacement is safe only after drain, a healthy database and zero active/pending/in-flight/quarantined work. This never makes RAM sessions durable or supplies multi-instance routing.

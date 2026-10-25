@@ -61,16 +61,21 @@ module Fuel
     @mutex = Mutex.new
     @authorize : Proc(String, String, String, Bool)
 
-    def initialize(@history_limit = 50, @max_channels = 2000, @ttl = 24.hours, @censor = Censor.new([] of String), @store : Store? = nil, @persist = [] of String, @delivery : Proc(String, String, JSON::Any, Nil)? = nil, &@authorize : String, String, String -> Bool)
+    def initialize(@history_limit = 50, @max_channels = 2000, @ttl = 24.hours, @censor = Censor.new([] of String), @store : Store? = nil, @persist = [] of String, @delivery : Proc(String, String, JSON::Any, Nil)? = nil,
+                   @display_name : Proc(String, JSON::Any, String) = ->(actor : String, progress : JSON::Any) { actor },
+                   @report_reasons = ["harassment", "spam", "threat", "personal_data", "other"], &@authorize : String, String, String -> Bool)
       Fuel.check((0..1000).includes?(@history_limit) && @max_channels > 0, "invalid_capacity")
       Fuel.check(@history_limit > 0 || !@delivery.nil?, "delivery_required")
-      Fuel.check(@persist.all? { |kind| ["private", "guild"].includes?(kind) } && (@persist.empty? || !@store.nil?), "invalid_channel")
+      Fuel.check(@persist.all? { |kind| ["global", "session", "private", "guild"].includes?(kind) } && (@persist.empty? || !@store.nil?), "invalid_channel")
     end
 
-    def post(actor : String, kind : String, target : String, text : String) : JSON::Any
+    def post(actor : String, kind : String, target : String, text : String, progress : JSON::Any? = nil) : JSON::Any
       authorize(actor, kind, target)
       Fuel.check(!text.strip.empty? && text.bytesize <= 2000 && text.each_char.none? { |c| c.control? && c != '\n' }, "invalid_message")
-      entry = Fuel.json({id: Fuel.id, actor: actor, text: @censor.filter(text.strip), created_at: Time.utc.to_unix})
+      profile = progress || @store.try(&.public_progress(actor)) || JSON.parse("{}")
+      name = @display_name.call(actor, profile)
+      Fuel.check((1..80).includes?(name.size) && name.each_char.none?(&.control?), "invalid_name")
+      entry = Fuel.json({id: Fuel.id, actor: actor, name: name, text: @censor.filter(text.strip), created_at: Time.utc.to_unix})
       if @history_limit > 0 && @persist.includes?(kind)
         @store.not_nil!.save_chat(key(actor, kind, target), actor, kind == "private" ? target : "", entry, @history_limit, @ttl)
       elsif @history_limit > 0
@@ -92,11 +97,47 @@ module Fuel
     def history(actor : String, kind : String, target : String) : Array(JSON::Any)
       authorize(actor, kind, target)
       if @persist.includes?(kind)
-        return @store.not_nil!.read_chat(key(actor, kind, target), @history_limit, @ttl)
+        return @store.not_nil!.read_chat(key(actor, kind, target), @history_limit, @ttl, actor)
       end
+      muted = @store.try(&.muted_ids(actor)) || [] of String
       @mutex.synchronize do
         cleanup
-        (@history[key(actor, kind, target)]? || [] of JSON::Any).map { |e| JSON.parse(e.to_json) }
+        (@history[key(actor, kind, target)]? || [] of JSON::Any).reject { |entry| muted.includes?(entry["actor"].as_s) }.map { |e| JSON.parse(e.to_json) }
+      end
+    end
+
+    def set_muted(credential : Credential, target : String, value : Bool)
+      (@store || raise Error.new("not_configured")).set_muted(credential, target, value)
+    end
+
+    def muted(credential : Credential) : Array(JSON::Any)
+      store = @store || raise Error.new("not_configured")
+      store.muted(credential).map { |entry| Fuel.json({id: entry["id"], name: @display_name.call(entry["id"].as_s, entry["progress"])}) }
+    end
+
+    def report(credential : Credential, kind : String, target : String, id : String, reason : String)
+      store = @store || raise Error.new("not_configured")
+      Fuel.key(id)
+      Fuel.check(@report_reasons.includes?(reason), "invalid_report")
+      actor = store.authenticate(credential)
+      message = message(actor, kind, target, id) || raise Error.new("invalid_report")
+      Fuel.check(message["actor"].as_s != actor, "invalid_report")
+      store.with_accounts(credential, [message["actor"].as_s], nil) do |c, current, profiles|
+        Fuel.check(profiles.has_key?(message["actor"].as_s), "invalid_report")
+        retained = message(current, kind, target, id) || raise Error.new("invalid_report")
+        store.record_report(c, current, key(current, kind, target), retained, reason)
+      end
+    end
+
+    private def message(actor, kind, target, id) : JSON::Any?
+      authorize(actor, kind, target)
+      if @persist.includes?(kind)
+        @store.not_nil!.chat_message(key(actor, kind, target), id)
+      else
+        @mutex.synchronize do
+          cleanup
+          @history[key(actor, kind, target)]?.try(&.find { |entry| entry["id"].as_s == id }).try { |entry| JSON.parse(entry.to_json) }
+        end
       end
     end
 

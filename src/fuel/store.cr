@@ -20,6 +20,11 @@ module Fuel
   class Store
     getter db : DB::Database
     getter namespace : String
+    @analytics_delivery = Mutex.new
+
+    def with_analytics_delivery(&)
+      @analytics_delivery.synchronize { yield }
+    end
 
     def initialize(url : String, @namespace : String, @device_key : String, @pair_key : String, @previous_device_keys = [] of String, @max_accounts = 1000000)
       Fuel.check(url.starts_with?("postgres://") || url.starts_with?("postgresql://"), "postgres_required")
@@ -34,7 +39,7 @@ module Fuel
 
     def migrate
       @db.transaction do |tx|
-        {{ read_file("#{__DIR__}/../../migrations/001_initial.sql") }}.split(';').each do |statement|
+        ({{ read_file("#{__DIR__}/../../migrations/001_initial.sql") }} + {{ read_file("#{__DIR__}/../../migrations/002_accounts.sql") }} + {{ read_file("#{__DIR__}/../../migrations/003_device_lifecycle.sql") }} + {{ read_file("#{__DIR__}/../../migrations/004_moderation.sql") }} + {{ read_file("#{__DIR__}/../../migrations/005_analytics_lifecycle.sql") }}).split(';').each do |statement|
           tx.connection.exec(statement) unless statement.strip.empty?
         end
       end
@@ -42,6 +47,7 @@ module Fuel
 
     def bootstrap(credential : Credential, source : String) : String
       transaction do |c|
+        Fuel.check(c.query_one?("SELECT id FROM fuel_retired_bindings WHERE ns=$1 AND id=$2", @namespace, credential.id, as: String).nil?, "unauthorized")
         if row = c.query_one?("SELECT verifier FROM fuel_bindings WHERE ns=$1 AND id=$2", @namespace, credential.id, as: String)
           return verify(c, credential)
         end
@@ -64,15 +70,22 @@ module Fuel
     def bindings(credential : Credential) : Array(JSON::Any)
       with_actor(credential) do |c, account|
         result = [] of JSON::Any
-        c.query("SELECT id,revoked FROM fuel_bindings WHERE ns=$1 AND account=$2 ORDER BY id", @namespace, account) do |rs|
-          rs.each { result << Fuel.json({id: rs.read(String), revoked: rs.read(Bool)}) }
+        c.query("SELECT id,revoked,created_at,last_seen FROM fuel_bindings WHERE ns=$1 AND account=$2 ORDER BY created_at,id", @namespace, account) do |rs|
+          rs.each do
+            id, revoked, created, seen = rs.read(String, Bool, Time, Time)
+            result << Fuel.json({id: id, revoked: revoked, current: id == credential.id, created_at: created.to_rfc3339, last_seen: seen.to_rfc3339})
+          end
         end
         result
       end
     end
 
-    def revoke(credential : Credential, binding : String)
+    def revoke(credential : Credential, binding : String, confirmed_last : Bool = false)
       with_actor(credential) do |c, account|
+        target = c.query_one?("SELECT revoked FROM fuel_bindings WHERE ns=$1 AND id=$2 AND account=$3", @namespace, binding, account, as: Bool)
+        Fuel.check(!target.nil?, "not_found")
+        count = c.query_one("SELECT count(*) FROM fuel_bindings WHERE ns=$1 AND account=$2 AND NOT revoked", @namespace, account, as: Int64)
+        Fuel.check(target || count > 1 || confirmed_last, "last_device_confirmation_required")
         c.exec("UPDATE fuel_bindings SET revoked=true WHERE ns=$1 AND id=$2 AND account=$3", @namespace, binding, account)
       end
     end
@@ -97,6 +110,7 @@ module Fuel
       limit("pair:source:#{source}", 10, 60)
       normalized = Invite.normalize(code)
       transaction do |c|
+        Fuel.check(c.query_one?("SELECT id FROM fuel_retired_bindings WHERE ns=$1 AND id=$2", @namespace, candidate.id, as: String).nil?, "invalid_code")
         row = c.query_one?("SELECT id,candidate,phrase FROM fuel_pairs WHERE ns=$1 AND code_hash=$2 AND status='pending' AND expires_at>now() FOR UPDATE", @namespace, code_hash(normalized), as: {String, String?, String?})
         raise Error.new("invalid_code") unless row
         id, prior, phrase = row
@@ -117,6 +131,16 @@ module Fuel
           rs.each { items << Fuel.json({id: rs.read(String), phrase: rs.read(String)}) }
         end
         items
+      end
+    end
+
+    def issued_pair(credential : Credential, id : String) : JSON::Any
+      Fuel.key(id)
+      with_actor(credential) do |c, account|
+        row = c.query_one?("SELECT status,phrase,extract(epoch from expires_at)::bigint,expires_at>now() FROM fuel_pairs WHERE ns=$1 AND id=$2 AND account=$3", @namespace, id, account, as: {String, String?, Int64, Bool})
+        raise Error.new("not_found") unless row
+        status = row[0] == "pending" && !row[3] ? "expired" : row[0]
+        Fuel.json({id: id, status: status, phrase: row[1], expires_at: row[2]})
       end
     end
 
@@ -177,7 +201,7 @@ module Fuel
         end
         reply = Fuel.json({status: "committed", result_id: id})
         c.exec("INSERT INTO fuel_results(ns,account,id,fingerprint,reply,board,name,outcome) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8)", @namespace, account, id, fingerprint, reply.to_json, board, name, outcome)
-        c.exec("UPDATE fuel_accounts SET progress=$3::jsonb WHERE ns=$1 AND id=$2", @namespace, account, progress.to_json)
+        c.exec("UPDATE fuel_accounts SET progress=$3::jsonb,progress_initialized=true WHERE ns=$1 AND id=$2", @namespace, account, progress.to_json)
         c.exec(<<-SQL, @namespace, board, account, score, name)
           INSERT INTO fuel_scores(ns,board,account,score,name) VALUES($1,$2,$3,$4,$5)
           ON CONFLICT(ns,board,account) DO UPDATE SET score=excluded.score,name=excluded.name,achieved_at=now()
@@ -218,10 +242,11 @@ module Fuel
 
     def delete_account(credential : Credential, confirmed : Bool, &purge : DB::Connection, String ->)
       Fuel.check(confirmed, "confirmation_required")
-      with_actor(credential) do |c, account|
-        yield c, account
-        c.exec("DELETE FROM fuel_chat WHERE ns=$1 AND (actor=$2 OR recipient=$2)", @namespace, account)
-        c.exec("DELETE FROM fuel_accounts WHERE ns=$1 AND id=$2", @namespace, account)
+      with_analytics_delivery do
+        with_actor(credential) do |c, account|
+          yield c, account
+          purge_account(c, account)
+        end
       end
     end
 
@@ -248,6 +273,8 @@ module Fuel
       @db.exec("DELETE FROM fuel_pairs WHERE ns=$1 AND expires_at<now()-interval '1 day'", @namespace)
       @db.exec("DELETE FROM fuel_bindings WHERE ns=$1 AND account IS NULL AND expires_at<now()", @namespace)
       @db.exec("DELETE FROM fuel_chat WHERE ns=$1 AND expires_at<now()", @namespace)
+      @db.exec("DELETE FROM fuel_deletions WHERE ns=$1 AND expires_at<now()", @namespace)
+      @db.exec("DELETE FROM fuel_reports WHERE ns=$1 AND expires_at<now()", @namespace)
     end
 
     def save_chat(channel : String, actor : String, recipient : String, entry : JSON::Any, limit : Int32, ttl : Time::Span)
@@ -258,9 +285,9 @@ module Fuel
       end
     end
 
-    def read_chat(channel : String, limit : Int32, ttl : Time::Span) : Array(JSON::Any)
+    def read_chat(channel : String, limit : Int32, ttl : Time::Span, viewer : String = "") : Array(JSON::Any)
       entries = [] of JSON::Any
-      @db.query("SELECT body::text FROM fuel_chat WHERE ns=$1 AND channel=$2 AND expires_at>now() AND created_at>now()-make_interval(secs=>$4) ORDER BY created_at DESC,id DESC LIMIT $3", @namespace, channel, limit, ttl.total_seconds.to_i) do |rs|
+      @db.query("SELECT body::text FROM fuel_chat WHERE ns=$1 AND channel=$2 AND expires_at>now() AND created_at>now()-make_interval(secs=>$4) AND NOT EXISTS(SELECT 1 FROM fuel_mutes WHERE ns=$1 AND account=$5 AND target=fuel_chat.actor) ORDER BY created_at DESC,id DESC LIMIT $3", @namespace, channel, limit, ttl.total_seconds.to_i, viewer) do |rs|
         rs.each { entries << JSON.parse(rs.read(String)) }
       end
       entries.reverse
@@ -281,6 +308,7 @@ module Fuel
       row = c.query_one?("SELECT b.account,b.verifier FROM fuel_bindings b JOIN fuel_accounts a ON a.ns=b.ns AND a.id=b.account WHERE b.ns=$1 AND b.id=$2 AND NOT b.revoked FOR UPDATE OF a,b", @namespace, credential.id, as: {String, String})
       raise Error.new("unauthorized") unless row
       raise Error.new("unauthorized") unless verify_proof(c, credential, row[1])
+      c.exec("UPDATE fuel_bindings SET last_seen=now() WHERE ns=$1 AND id=$2 AND last_seen<now()-interval '1 minute'", @namespace, credential.id)
       row[0]
     end
 

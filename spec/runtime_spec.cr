@@ -56,7 +56,7 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
         response = Channel(Int32).new
         spawn { response.send(client.get("/fuel/v1/sessions/#{room.id}/events?cursor=0&epoch=#{room.epoch}", headers).status_code) }
         sleep 20.milliseconds
-        store.revoke(credential, credential.id)
+        store.revoke(credential, credential.id, confirmed_last: true)
         response.receive.should eq(401)
         # At most one already-sent snapshot remains buffered before closure.
         5.times { break if socket.receive?.nil? }

@@ -34,7 +34,7 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
       chat.post(account, "private", "bob", "hello")
       restarted = Fuel::Chat.new(store: store, persist: ["private"], history_limit: 2) { |_, _, _| false }
       restarted.history("bob", "private", account).first["text"].as_s.should eq("hello")
-      expect_raises(Fuel::Error, "invalid_channel") { Fuel::Chat.new(store: store, persist: ["global"]) { |_, _, _| true } }
+      expect_raises(Fuel::Error, "invalid_channel") { Fuel::Chat.new(store: store, persist: ["unknown"]) { |_, _, _| true } }
     end
   end
 end
