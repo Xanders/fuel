@@ -16,7 +16,40 @@ class CounterRules < Fuel::Rules
   end
 end
 
+class LobbyRules < CounterRules
+  def join(state : JSON::Any, actor : String, progress : JSON::Any) : JSON::Any
+    members = state.as_h["members"]? || Fuel.json([] of String)
+    members.as_a << JSON::Any.new(actor)
+    state.as_h["members"] = members
+    state
+  end
+end
+
 describe Fuel::Sessions do
+  it "fills configured four-player matches and rejects a mismatched trusted capacity" do
+    sessions = Fuel::Sessions.new(CounterRules.new, modes: {"squad" => Fuel::ModePolicy.new(4)})
+    actors = ["alice", "bob", "carol", "dave"]
+    profiles = actors.to_h { |actor| {actor, JSON.parse("{}")} }
+    actors.first(3).each { |actor| sessions.match(actor, "squad", profiles: profiles)["status"].as_s.should eq("waiting") }
+    result = sessions.match("dave", "squad", profiles: profiles)
+    result["status"].as_s.should eq("matched")
+    room = sessions.get(result["session_id"].as_s)
+    room.members.size.should eq(4)
+    room.capacity.should eq(4)
+    expect_raises(Fuel::Error, "invalid_mode") { sessions.match_party(["eve"], "squad", 2, profiles: {"eve" => JSON.parse("{}")}) }
+  end
+
+  it "publishes joining members to waiting viewers with a new revision" do
+    sessions = Fuel::Sessions.new(LobbyRules.new)
+    room = sessions.create("alice", "duel", 2)
+    before = room.snapshot("alice")
+    sessions.join("bob", room.id)
+    room.tick(50.milliseconds)
+    after = room.snapshot("alice")
+    after["state"]["members"].as_a.map(&.as_s).should eq(["alice", "bob"])
+    after["revision"].as_s.to_i64.should be > before["revision"].as_s.to_i64
+  end
+
   it "keeps a co-op party together and removes expired waiting tickets" do
     rooms = Fuel::Sessions.new(CounterRules.new, ticket_ttl: 0.seconds)
     rooms.match_party(["alice", "bob"], "coop", 4)["status"].as_s.should eq("waiting")
@@ -107,7 +140,8 @@ describe "private projections" do
     room = rooms.create("alice", "duel")
     rooms.join("bob", room.id)
     before = room.snapshot("bob")["revision"]
-    room.command("alice", room.epoch, "secret", 0_i64, JSON.parse(%({"amount":1})))
+    revision = room.snapshot("alice")["revision"].as_s.to_i64
+    room.command("alice", room.epoch, "secret", revision, JSON.parse(%({"amount":1})))
     room.snapshot("bob")["revision"].should eq(before)
   end
 end

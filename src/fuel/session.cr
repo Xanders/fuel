@@ -151,6 +151,7 @@ module Fuel
         additions.each { |actor| candidate = @rules.join(candidate, actor, profiles[actor]? || JSON.parse("{}"), events) }
         additions.each { |actor| @rules.project(JSON.parse(candidate.to_json), actor) }
         publish_candidate(candidate, preferences: preferences.select { |actor, _| additions.includes?(actor) }, facts: events.facts)
+        changed(force: !additions.empty?)
         @members.concat(additions)
         additions.each { |actor| remember(actor) }
       end
@@ -466,10 +467,10 @@ module Fuel
       @visible[actor] = @rules.project(JSON.parse(@state.to_json), actor).to_json
     end
 
-    private def changed(initiator : String? = nil)
+    private def changed(initiator : String? = nil, force = false)
       @members.each do |actor|
         visible = @rules.project(JSON.parse(@state.to_json), actor).to_json
-        @view_revisions[actor] += 1 if actor == initiator || @visible[actor]? != visible
+        @view_revisions[actor] += 1 if force || actor == initiator || @visible[actor]? != visible
         @visible[actor] = visible
       end
     end
@@ -546,7 +547,7 @@ module Fuel
     end
 
     def match(actor : String, mode : String, generation = "default", profiles = {} of String => JSON::Any, preferences = {} of String => Int64) : JSON::Any
-      match_party([actor], mode, 2, generation, profiles, preferences)
+      match_party([actor], mode, @modes[mode]?.try(&.capacity) || 2, generation, profiles, preferences)
     end
 
     # Game code must verify party consent before calling this trusted API.
@@ -555,7 +556,7 @@ module Fuel
       Fuel.key(generation)
       Fuel.check(@modes.empty? || @modes.has_key?(mode), "invalid_mode")
       if policy = @modes[mode]?
-        Fuel.check(!policy.shared && capacity <= policy.capacity, "invalid_mode")
+        Fuel.check(!policy.shared && capacity == policy.capacity, "invalid_mode")
         Fuel.check(actors.all? { |actor| profiles.has_key?(actor) }, "missing_profile")
       end
       Fuel.check(!actors.empty? && actors.uniq == actors && (2..32).includes?(capacity) && actors.size <= capacity, "invalid_party")
