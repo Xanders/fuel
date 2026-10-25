@@ -9,6 +9,16 @@ class RuntimeProbeStore < Fuel::Store
   end
 end
 
+class LegacyCompletionRules < EffectRules
+  def effects(state : JSON::Any, now : Int64) : Array(Fuel::Effect)
+    [] of Fuel::Effect
+  end
+
+  def result(state : JSON::Any, actor : String) : Fuel::GameResult?
+    Fuel::GameResult.new("counter", 1_i64, "Player", JSON.parse("{}")) if state["value"].as_i64 > 0
+  end
+end
+
 class WaitingWalletRules < WalletRules
   getter entered = Channel(Nil).new(1)
   getter release = Channel(Nil).new(1)
@@ -26,6 +36,23 @@ end
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "shared service runtime" do
+    it "cannot replace a drained process with an unsettled completion result" do
+      store = Fuel::Store.new(url, "legacy_drain_#{Fuel.id}", "d" * 32, "p" * 32)
+      sessions = Fuel::Sessions.new(LegacyCompletionRules.new)
+      room = sessions.create("alice", "solo", 1)
+      room.command("alice", room.epoch, "finish", 0_i64, Fuel.json({id: "finish"}))
+      room.finished?.should be_true
+      room.pending_result?.should be_true
+      runtime = Fuel::Runtime.new(store, sessions, Fuel::Handler.new(store, sessions, [] of String), WalletRules.new)
+      runtime.drain
+      state = runtime.health
+      state["active_sessions"].as_i.should eq(0)
+      state["pending_work"].as_i.should eq(1)
+      state["safe_to_replace"].as_bool.should be_false
+      runtime.stop
+      store.close
+    end
+
     it "serves later rooms while the first worker batch keeps producing effects" do
       store = Fuel::Store.new(url, "runtime_fair_#{Fuel.id}", "d" * 32, "p" * 32)
       store.migrate

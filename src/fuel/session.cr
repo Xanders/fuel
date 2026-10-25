@@ -187,7 +187,7 @@ module Fuel
       @results.delete(actor)
       @settled.delete(actor)
       @ended = true if @members.empty?
-      changed
+      changed(force: true)
     end
 
     def disconnect(actor : String, generation : String)
@@ -317,6 +317,10 @@ module Fuel
 
     def pending_effects : Int32
       @mutex.synchronize { @pending.size }
+    end
+
+    def pending_work : Int32
+      @mutex.synchronize { @pending.size + @results.keys.count { |actor| !@settled.includes?(actor) } }
     end
 
     def begin_effect : Effect?
@@ -715,7 +719,7 @@ module Fuel
     def stats
       snapshot = rooms
       {rooms: snapshot.size, active: snapshot.count { |room| active?(room) },
-       pending: snapshot.sum(&.pending_effects), quarantined: snapshot.count(&.quarantined?)}
+       pending: snapshot.sum(&.pending_work), quarantined: snapshot.count(&.quarantined?)}
     end
 
     private def create_unlocked(actor, mode, capacity, public, late_join, progress : JSON::Any = JSON.parse("{}"), preferences = {} of String => Int64) : Room

@@ -26,6 +26,19 @@ class LobbyRules < CounterRules
 end
 
 describe Fuel::Sessions do
+  it "publishes changed readiness when a member leaves an unchanged projection" do
+    sessions = Fuel::Sessions.new(CounterRules.new)
+    room = sessions.create("alice", "duel", 2)
+    sessions.join("bob", room.id)
+    room.ready("alice")
+    before = room.snapshot("alice")
+    before["ready"].as_bool.should be_false
+    room.leave("bob")
+    after = room.snapshot("alice")
+    after["ready"].as_bool.should be_true
+    after["revision"].as_s.to_i64.should be > before["revision"].as_s.to_i64
+  end
+
   it "fills configured four-player matches and rejects a mismatched trusted capacity" do
     sessions = Fuel::Sessions.new(CounterRules.new, modes: {"squad" => Fuel::ModePolicy.new(4)})
     actors = ["alice", "bob", "carol", "dave"]
