@@ -38,6 +38,19 @@ class DepartureEffectRules < EffectRules
 end
 
 describe "bounded room effects" do
+  it "advances the viewer revision when settlement becomes quarantined" do
+    actor = Fuel.id
+    room = Fuel::Room.new(EffectRules.new, actor, "solo", 1, false)
+    room.command(actor, room.epoch, "one", 0_i64, Fuel.json({id: "one"}))
+    before = room.snapshot(actor)["revision"].as_s.to_i64
+    effect = room.begin_effect.not_nil!
+    room.retry_effect(effect, "conflict")
+    snapshot = room.snapshot(actor)
+    snapshot["effect_error"].as_s.should eq("conflict")
+    snapshot["revision"].as_s.to_i64.should be > before
+    room.pending_effects.should eq(1)
+  end
+
   it "bounds receipt bytes and leaves an explicit cursor gap for durable recovery" do
     actor = Fuel.id
     room = Fuel::Room.new(EffectRules.new, actor, "solo", 1, false)

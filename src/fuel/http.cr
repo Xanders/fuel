@@ -54,7 +54,8 @@ module Fuel
       end
       if ["/fuel/v1/auth/prepare", "/fuel/v1/auth/pair/prepare"].includes?(path) && context.request.method == "GET"
         slot = path.ends_with?("pair/prepare") ? "__Host-fuel-candidate" : "__Host-fuel"
-        credential = read_credential(context, slot) || Credential.new(Fuel.id, Random::Secure.hex(32))
+        existing = read_credential(context, slot)
+        credential = existing || Credential.new(Fuel.id, Random::Secure.hex(32))
         if slot == "__Host-fuel-candidate"
           renew = context.request.query_params["new"]? == "true"
           begin
@@ -66,7 +67,7 @@ module Fuel
           end
           credential = Credential.new(Fuel.id, Random::Secure.hex(32)) if renew
         end
-        cookie(context, credential, slot)
+        cookie(context, credential, slot) if existing.nil? || credential.id != existing.id
         reply(context, Fuel.json({status: "prepared"}))
         return
       end
@@ -136,10 +137,9 @@ module Fuel
                  dispatch(context, credential, data)
                end
       session_parts = path.split('/')
-      if session_parts.size >= 5 && session_parts[1..3] == ["fuel", "v1", "sessions"] && !path.ends_with?("/leave")
+      if session_parts.size >= 5 && session_parts[1..3] == ["fuel", "v1", "sessions"] && session_parts[4] != "mine" && !path.ends_with?("/leave")
         @sessions.get(session_parts[4]).persist_result(@store, credential, @analytics)
       end
-      cookie(context, credential, slot) if context.request.headers["Cookie"]? && path != "/fuel/v1/auth/delete"
       reply(context, result)
     rescue error : Error
       code = error.code == "rate_limit" ? "rate_limited" : error.code

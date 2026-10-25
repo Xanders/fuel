@@ -8,6 +8,7 @@ module Fuel
     @running = false
     @inflight = 0
     @workers = 0
+    @effect_cursor = 0
     @mutex = Mutex.new
 
     def server : HTTP::Server
@@ -70,10 +71,16 @@ module Fuel
     # Each room exposes one head; slow database work holds no room/registry lock.
     def pump_effects : Int32
       started = 0
-      @sessions.rooms.each do |room|
+      rooms = @sessions.rooms
+      return started if rooms.empty?
+      first = @mutex.synchronize { @effect_cursor % rooms.size }
+      rooms.size.times do |offset|
+        index = (first + offset) % rooms.size
+        room = rooms[index]
         reserved = @mutex.synchronize do
           if @workers < @worker_limit
             @workers += 1
+            @effect_cursor = (index + 1) % rooms.size
             true
           else
             false

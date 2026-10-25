@@ -1,4 +1,4 @@
-require "./spec_helper"
+require "./account_spec"
 require "http/server"
 
 class SelectionRules < Fuel::Rules
@@ -15,8 +15,54 @@ class SelectionRules < Fuel::Rules
   end
 end
 
+class PausedSelectionAccounts < WalletRules
+  getter entered = Channel(Nil).new
+  getter release = Channel(Nil).new
+
+  def refresh(account : String, state : JSON::Any, now : Int64) : JSON::Any
+    @entered.send(nil)
+    @release.receive
+    state
+  end
+end
+
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "Browser selection recovery" do
+    it "does not restore a stale cookie when an older account request finishes after selection" do
+      store = Fuel::Store.new(url, "late_selection_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      a = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      b = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      store.bootstrap(a, "test")
+      second = store.bootstrap(b, "test")
+      prefix = "__Host-fuel-#{Digest::SHA256.hexdigest(store.namespace)}"
+      headers = HTTP::Headers{"Origin" => "https://game.example", "Cookie" => "#{prefix}=#{a.id}:#{a.secret}; #{prefix}-previous=#{b.id}:#{b.secret}"}
+      rules = PausedSelectionAccounts.new
+      server = HTTP::Server.new(Fuel::Handler.new(store, Fuel::Sessions.new(SelectionRules.new), ["https://game.example"], account_rules: rules))
+      address = server.bind_tcp("127.0.0.1", 0)
+      spawn { server.listen }
+      client = HTTP::Client.new(address.address, address.port)
+      other = HTTP::Client.new(address.address, address.port)
+      late = Channel(HTTP::Client::Response).new
+      begin
+        spawn { late.send(other.get("/fuel/v1/account", headers)) }
+        rules.entered.receive
+        switched = client.post("/fuel/v1/auth/switch", headers, {from: a.id, to: b.id}.to_json)
+        switched.status_code.should eq(200)
+        JSON.parse(switched.body)["data"]["account_id"].as_s.should eq(second)
+        switched.headers.get("Set-Cookie").any? { |value| value.starts_with?("#{prefix}=#{b.id}:") }.should be_true
+        rules.release.send(nil)
+        response = late.receive
+        response.status_code.should eq(200)
+        response.headers.has_key?("Set-Cookie").should be_false
+      ensure
+        client.close
+        other.close
+        server.close
+        store.close
+      end
+    end
+
     it "retries an exact swap without toggling and can select the survivor after deletion" do
       store = Fuel::Store.new(url, "selection_#{Fuel.id}", "d" * 32, "p" * 32)
       store.migrate
@@ -35,6 +81,7 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
         cross_site.status_code.should eq(403)
         cross_site.headers.has_key?("Set-Cookie").should be_false
         selection = client.get("/fuel/v1/auth/selection", headers)
+        client.get("/fuel/v1/auth/prepare", headers).headers.has_key?("Set-Cookie").should be_false
         selection.status_code.should eq(200)
         JSON.parse(selection.body)["data"]["current"]["binding_id"].as_s.should eq(a.id)
         issued = store.issue_pair(a)

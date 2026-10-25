@@ -47,7 +47,9 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
         fresh_cookie.should_not eq(cookie)
         previous_only["Cookie"] = "#{fresh_cookie}; #{previous_name}=#{value}"
         client.post("/fuel/v1/auth/bootstrap", previous_only, "{}").status_code.should eq(200)
-        selected = client.post("/fuel/v1/auth/switch", previous_only, "{}")
+        fresh_id = fresh_cookie.split('=', 2)[1].split(':', 2)[0]
+        selected = client.post("/fuel/v1/auth/switch", previous_only, {from: fresh_id, to: value.split(':', 2)[0]}.to_json)
+        selected.status_code.should eq(200)
         JSON.parse(selected.body)["data"]["account_id"].as_s.should eq(previous_account)
       ensure
         client.close
@@ -103,6 +105,9 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
         client.get("/fuel/v1/account", headers).status_code.should eq(404)
         account = JSON.parse(client.get("/sample/fuel/v1/account", headers).body)["data"]
         account["progress"]["coins"].as_i64.should eq(100)
+        mine = client.get("/sample/fuel/v1/sessions/mine", headers)
+        mine.status_code.should eq(200)
+        JSON.parse(mine.body)["data"].as_a.should be_empty
         client2.get("/fuel/v1/account", headers).status_code.should eq(401)
         id = Fuel.id
         actor = account["account_id"].as_s

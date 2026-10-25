@@ -26,6 +26,36 @@ end
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "shared service runtime" do
+    it "serves later rooms while the first worker batch keeps producing effects" do
+      store = Fuel::Store.new(url, "runtime_fair_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      actors = Array.new(9) do
+        store.bootstrap(Fuel::Credential.new(Fuel.id, Random::Secure.hex(32)), Fuel.id)
+      end
+      sessions = Fuel::Sessions.new(EffectRules.new)
+      rooms = actors.map { |actor| sessions.create(actor, "solo", 1) }
+      runtime = Fuel::Runtime.new(store, sessions, Fuel::Handler.new(store, sessions, [] of String), WalletRules.new)
+      begin
+        3.times do |round|
+          actors.zip(rooms).each do |actor, room|
+            if room.pending_effects == 0
+              room.command(actor, room.epoch, "grant#{round}", room.snapshot(actor)["revision"].as_s.to_i64, Fuel.json({id: "grant#{round}"}))
+            end
+          end
+          runtime.pump_effects.should eq(8)
+          deadline = Time.instant + 3.seconds
+          until runtime.health["inflight"].as_i == 0 || Time.instant > deadline
+            sleep 1.millisecond
+          end
+          runtime.health["inflight"].as_i.should eq(0)
+        end
+        rooms.last.snapshot(actors.last)["receipt_cursor"].as_s.to_i64.should be > 0
+      ensure
+        runtime.stop
+        store.close
+      end
+    end
+
     it "does not report a drained replacement safe while an admitted HTTP write is in flight" do
       store = Fuel::Store.new(url, "drain_http_#{Fuel.id}", "d" * 32, "p" * 32)
       store.migrate

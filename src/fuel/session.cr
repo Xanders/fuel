@@ -330,6 +330,7 @@ module Fuel
       @mutex.synchronize do
         if @pending.first?.try(&.id) == effect.id
           @effect_inflight = false
+          @view_revisions.each_key { |actor| @view_revisions[actor] += 1 } if @effect_error != error
           @effect_error = error
           @effect_retry_at = Time.instant + delay
         end
