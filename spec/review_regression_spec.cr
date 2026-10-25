@@ -52,11 +52,12 @@ describe "initial review regressions" do
   it "never reuses a viewer revision after leaving and rejoining" do
     room = Fuel::Room.new(CounterRules.new, "alice", "duel", 2, false, receipt_limit: 1)
     room.join(["bob"])
-    room.command("alice", room.epoch, "a", 0_i64, JSON.parse(%({"amount":1})))
-    room.command("alice", room.epoch, "b", 1_i64, JSON.parse(%({"amount":1})))
+    revision = room.snapshot("alice")["revision"].as_s.to_i64
+    room.command("alice", room.epoch, "a", revision, JSON.parse(%({"amount":1})))
+    room.command("alice", room.epoch, "b", revision + 1, JSON.parse(%({"amount":1})))
     room.leave("alice")
     room.join(["alice"])
-    expect_raises(Fuel::Error, "revision_conflict") { room.command("alice", room.epoch, "a", 0_i64, JSON.parse(%({"amount":1}))) }
+    expect_raises(Fuel::Error, "revision_conflict") { room.command("alice", room.epoch, "a", revision, JSON.parse(%({"amount":1}))) }
   end
 
   it "allows new matchmaking generations after leaving a matched room" do
