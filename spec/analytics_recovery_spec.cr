@@ -82,15 +82,15 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
       started.receive
       spawn { progress.send(store.account(credential, WalletRules.new)) }
       gameplay_completed = select
-                           when progress.receive then true
-                           when timeout(100.milliseconds) then false
-                           end
+      when progress.receive then true
+      when timeout(100.milliseconds) then false
+      end
       spawn { optout_started.send(nil); analytics.enabled(credential, false); opted_out.send(nil) }
       optout_started.receive
       premature = select
-                  when opted_out.receive then true
-                  when timeout(20.milliseconds) then false
-                  end
+      when opted_out.receive then true
+      when timeout(20.milliseconds) then false
+      end
       release.send(nil)
       delivered.receive
       opted_out.receive unless premature
