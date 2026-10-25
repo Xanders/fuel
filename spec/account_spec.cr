@@ -178,6 +178,14 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
       store.account(credential, rules)["progress"]["coins"].as_i64.should eq(7)
     end
 
+    it "preserves progress written before the account facade during repeatable schema setup" do
+      proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      owner = store.bootstrap(proof, Fuel.id)
+      store.db.exec("UPDATE fuel_accounts SET progress='{\"coins\":7}'::jsonb,progress_initialized=false WHERE ns=$1 AND id=$2", store.namespace, owner)
+      store.migrate
+      store.account(proof, rules)["progress"]["coins"].as_i64.should eq(7)
+    end
+
     it "rolls back an already written progress row when durable receipt insertion fails" do
       credential = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
       actor = store.bootstrap(credential, "receipt-failure")

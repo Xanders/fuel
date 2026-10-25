@@ -2,6 +2,8 @@
 
 Existing games should migrate one shared subsystem at a time. This guide does not authorize changes to a running game or its data.
 
+The account-facade schema setup preserves pre-existing nonempty progress and progress with an earlier result receipt. Game-specific progress shape changes still require a deliberate migration; a new pure refresh hook must understand the stored shape before it is enabled.
+
 1. Record current compiler, rules, transport, persistence and recovery behavior. Preserve behavioral fixtures for success, lost responses, duplicate commands, stale replies and hidden data.
 2. Upgrade the game's compiler/dependencies independently when needed. Fuel currently validates Crystal 1.22.1 only.
 3. Add Fuel behind an existing boundary, such as account lifecycle, leaderboard or session gateway. Keep game rules in pure hooks. Preserve live compatibility where needed; a coordinated zero-user migration may deliberately replace both peers and discard obsolete adapters with the owner's explicit scope.
