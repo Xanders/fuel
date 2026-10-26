@@ -40,7 +40,7 @@ Native credentials use `Authorization: Fuel <binding-id>:<secret>` over TLS. Bro
 | POST | sessions/:id/commands | `{id,epoch,revision:"0",action:{...}}`; exact command retry |
 | POST | sessions/:id/ready | Mark this member ready |
 | POST | sessions/:id/leave | Leave; pending persistent effects/results cannot be discarded |
-| GET | sessions/:id/events?epoch=...&cursor=... | One long poll per binding, up to 15 seconds; revalidates after waits |
+| GET | sessions/:id/events?epoch=...&cursor=... | One long poll per binding, up to 15 seconds; revalidates after waits. Only request admission refreshes player activity; server-side waiting does not. |
 | GET | stream?session_id=...&account_id=... | WebSocket; optional expected public account protects browser selection races |
 | POST | chat | `{kind,target,text}`; authoritative name, membership, censor and bounds |
 | GET | chat?kind=...&target=... | Accessible retained history, excluding muted players |

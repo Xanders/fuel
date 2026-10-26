@@ -294,12 +294,14 @@ module Fuel
         revision = context.request.query_params["cursor"]? || ""
         epoch = context.request.query_params["epoch"]? || ""
         deadline = Time.instant + 15.seconds
+        refresh_activity = true
         loop do
           state = @store.with_accounts(credential, [] of String, @account_rules) do |_, actor, profiles, preferences|
             room = @sessions.get(session)
             room.preference(actor, preferences[actor])
-            room.snapshot(actor, progress: profiles[actor])
+            room.snapshot(actor, progress: profiles[actor], refresh_activity: refresh_activity)
           end
+          refresh_activity = false
           Fuel.check(epoch.empty? || state["epoch"] == epoch, "session_lost")
           return state if state["revision"].as_s != revision || Time.instant >= deadline
           sleep 100.milliseconds

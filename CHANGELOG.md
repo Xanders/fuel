@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3 — long-poll presence
+
+- Long-poll admission refreshes player activity once. Subsequent server-side checks preserve credential, membership and game authorization checks without renewing presence for a disconnected HTTP client. Ordinary snapshot requests still refresh activity. Wire-compatible with SDK 0.3.0.
+
 ## 0.3.2 — private settlement publication
 
 - Analytics-only effect acknowledgement no longer advances an unrelated viewer's revision when its projection and visible metadata are unchanged. Effect receipts notify their actual recipients; clearing visible saving backpressure still notifies all members. Wire-compatible with SDK 0.3.0.

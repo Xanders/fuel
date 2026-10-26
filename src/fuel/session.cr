@@ -232,9 +232,9 @@ module Fuel
       end
     end
 
-    def snapshot(actor : String, generation : String? = nil, progress : JSON::Any? = nil) : JSON::Any
+    def snapshot(actor : String, generation : String? = nil, progress : JSON::Any? = nil, refresh_activity : Bool = true) : JSON::Any
       @mutex.synchronize do
-        authorize(actor, progress)
+        authorize(actor, progress, refresh_activity)
         Fuel.check(generation.nil? || @connections[actor]? == generation, "stale_connection")
         view(actor)
       end
@@ -414,11 +414,11 @@ module Fuel
       end
     end
 
-    private def authorize(actor : String, progress : JSON::Any? = nil)
+    private def authorize(actor : String, progress : JSON::Any? = nil, refresh_activity : Bool = true)
       Fuel.check(!@ended, "session_ended")
       Fuel.check(@members.includes?(actor), "forbidden")
       @rules.authorize(JSON.parse(@state.to_json), actor, progress || JSON.parse("{}"))
-      @activity[actor] = Time.instant
+      @activity[actor] = Time.instant if refresh_activity
     end
 
     private def view(actor : String) : JSON::Any
