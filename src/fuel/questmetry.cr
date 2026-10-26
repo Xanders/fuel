@@ -45,8 +45,12 @@ module Fuel
     end
 
     def capture_client(credential : Credential, id : String, name : String, session : String, properties : JSON::Any, revision : Int64) : String
+      Fuel.key(id)
       Fuel.check(@client_events.includes?(name) && revision >= 0, "invalid_event")
-      @store.with_actor(credential) { |c, account| enqueue(c, account, id, name, session, properties, revision: revision, source: "client") }
+      @store.with_actor(credential) do |c, account|
+        client_id = @store.digest("analytics-client-id", {account, id}.to_json)
+        enqueue(c, account, client_id, name, session, properties, revision: revision, source: "client")
+      end
     end
 
     # Use inside record_result's effect block for atomic result/event creation.

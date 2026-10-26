@@ -16,6 +16,36 @@ end
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "client product analytics" do
+    it "isolates untrusted event IDs by account and from server-owned outcome IDs" do
+      store = Fuel::Store.new(url, "ui_ids_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      first = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      second = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      store.bootstrap(first, "fixture")
+      actor = store.bootstrap(second, "fixture")
+      trusted_id = Fuel.id + actor
+      delivered = [] of JSON::Any
+      sink = Fuel::Questmetry.new(store, {"screen_viewed" => ["screen"], "session_finished" => [] of String}, "test", "1.0.0", client_events: ["screen_viewed"]) do |body|
+        delivered.concat(JSON.parse(body)["events"].as_a)
+        202
+      end
+      begin
+        props = Fuel.json({screen: "home"})
+        sink.capture_client(first, trusted_id, "screen_viewed", "", props, 0_i64).should eq("queued")
+        sink.capture(second, trusted_id, "session_finished", "", JSON.parse("{}")).should eq("queued")
+        sink.capture_client(second, trusted_id, "screen_viewed", "", props, 0_i64).should eq("queued")
+        sink.capture_client(first, trusted_id, "screen_viewed", "", props, 0_i64).should eq("duplicate")
+        expect_raises(Fuel::Error, "invalid_key") { sink.capture_client(first, "bad id", "screen_viewed", "", props, 0_i64) }
+        sink.drain
+        delivered.size.should eq(3)
+        delivered.map { |event| event["event_id"].as_s }.uniq.size.should eq(3)
+        delivered.find { |event| event["source"] == "server" }.not_nil!["event_id"].as_s.should eq(trusted_id)
+        delivered.select { |event| event["source"] == "client" }.each { |event| event["event_id"].as_s.should_not eq(trusted_id) }
+      ensure
+        store.close
+      end
+    end
+
     it "uses an explicit client allowlist, current consent and server-owned context" do
       store = Fuel::Store.new(url, "ui_#{Fuel.id}", "d" * 32, "p" * 32)
       store.migrate
