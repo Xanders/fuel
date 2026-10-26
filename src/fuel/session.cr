@@ -346,6 +346,7 @@ module Fuel
       @mutex.synchronize do
         return unless @pending.first?.try(&.id) == effect.id && @effect_inflight
         reply = receipts[effect.actor]? || raise Error.new("missing_receipt")
+        backlog_before = @backlog
         candidate = effect.action == "_fuel_event" ? JSON.parse(@state.to_json) : @rules.acknowledge(JSON.parse(@state.to_json), effect, reply)
         publish_candidate(candidate, effect.id)
         @effect_inflight = false
@@ -360,10 +361,11 @@ module Fuel
           while log.size > @event_limit || log.to_json.bytesize > 16384
             log.shift
           end
+          @view_revisions[actor] += 1
         end
         changed
-        # Receipts and queue status are visible even when the game view is unchanged.
-        @view_revisions.each_key { |actor| @view_revisions[actor] += 1 }
+        # Saving pressure is visible to everyone; receipts only to their recipients.
+        @view_revisions.each_key { |actor| @view_revisions[actor] += 1 } if backlog_before != @backlog
       end
     end
 

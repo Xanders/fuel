@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2 — private settlement publication
+
+- Analytics-only effect acknowledgement no longer advances an unrelated viewer's revision when its projection and visible metadata are unchanged. Effect receipts notify their actual recipients; clearing visible saving backpressure still notifies all members. Wire-compatible with SDK 0.3.0.
+
 ## 0.3.1 — final snapshot after late input
 
 - A transient input arriving after room completion leaves the result unchanged and sends a fresh authorised final snapshot. It no longer closes a valid connection merely because the client's previous snapshot was active. Lost epochs and authorization failures still fail closed. Compatible with SDK 0.3.0.
