@@ -53,6 +53,8 @@ Native credentials use `Authorization: Fuel <binding-id>:<secret>` over TLS. Bro
 
 ## Snapshots and receipts
 
+A late transient input after room completion cannot mutate the result. The socket sends a fresh authorised final snapshot so an input based on an older active snapshot does not cause a reconnect loop. Lost epochs and authorization failures still fail closed. Fuel 0.3.1 is compatible with SDK 0.3.0.
+
 Snapshots contain `session_id,mode,code,epoch,revision,state,server_time,last_input,ready,saving_backlog,effect_error,receipt_cursor,receipt_base,receipts`. The domain `state` is always a private viewer projection. Socket envelopes also carry actual `account_id` and physical `generation`. Inputs are `{epoch,sequence:"1",action:{...}}`; never replay them after reconnect. About ten full snapshots/second are independent of the game's fixed-step tick.
 
 The RAM receipt log contains `{sequence,operation}` entries, bounded by 64 entries and 16 KiB. `receipt_base` identifies its first retained sequence, or cursor+1 when empty. Coalescing snapshots must not be mistaken for complete reliable event delivery. The SDK recovers authoritative operations through durable HTTP history; a large presentation backlog explicitly resynchronizes rather than replaying every old animation.

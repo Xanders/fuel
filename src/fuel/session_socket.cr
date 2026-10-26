@@ -35,6 +35,9 @@ module Fuel
         @limiter.check("input:#{actor}", 120, 1)
         room.input(actor, @generation.not_nil!, data["sequence"].as_s.to_i64, data["action"], progress: profiles[actor])
       end
+    rescue error : Error
+      raise error unless error.code == "session_ended"
+      send_snapshot(socket)
     end
 
     def send_message(socket : SocketConnection, raw : String) : Nil

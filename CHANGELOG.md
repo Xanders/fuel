@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 — final snapshot after late input
+
+- A transient input arriving after room completion leaves the result unchanged and sends a fresh authorised final snapshot. It no longer closes a valid connection merely because the client's previous snapshot was active. Lost epochs and authorization failures still fail closed. Compatible with SDK 0.3.0.
+
 ## 0.3.0 — shared account and service runtime preview
 
 Pure AccountRules/AccountTransaction with sorted participant locking, durable public/server effect receipts, terminal summaries and bounded HTTP recovery. Shared mode admission, private projection checks, FIFO effects/backpressure and Runtime lifecycle/drain/health replace consumer service loops. Namespaced cookies, exact browser selection retries, deletion proof/status/tombstones, mutes/reports and privacy-revision-aware Questmetry delivery. Development API changes require coordinated server/SDK updates; PostgreSQL-only, RAM sessions and single-instance limits remain deliberate.
