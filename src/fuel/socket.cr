@@ -354,6 +354,13 @@ module Fuel
     getter budget : SocketBudget
     getter limiter = Limiter.new
     @peers = {} of String => Set(SocketConnection)
+    @connections = Set(SocketConnection).new
+    getter? closed = false
+
+    def close
+      @closed = true
+      @connections.dup.each(&.close)
+    end
 
     def connected?(account : String) : Bool
       @peers[account]?.try(&.any? { |peer| !peer.closed? }) || false
@@ -395,6 +402,7 @@ module Fuel
     end
 
     def upgrade(context : HTTP::Server::Context, &factory : SocketConnection -> SocketPeer)
+      Fuel.check(!@closed, "maintenance")
       request = context.request
       Fuel.check(request.method == "GET" && request.headers["Upgrade"]?.try(&.downcase) == "websocket", "invalid_request")
       Fuel.check(request.headers["Connection"]?.try { |v| v.downcase.split(',').map(&.strip).includes?("upgrade") } == true, "invalid_request")
@@ -419,15 +427,19 @@ module Fuel
       context.response.headers["Sec-WebSocket-Accept"] = HTTP::WebSocket::Protocol.key_challenge(key)
       context.response.upgrade do |io|
         permit = nil
+        socket = nil
         begin
           # Reserve in the upgrade callback: a failed HTTP header flush must not
           # leak a permit. Recheck capacity before constructing any game peer.
+          Fuel.check(!@closed, "maintenance")
           permit = @budget.reserve
           io.write_timeout = 3.seconds if io.responds_to?(:write_timeout=)
           socket = SocketConnection.new(io, permit, self, @interval, @auth_timeout,
             @message_limit, @queue_limit, @output_limit)
+          @connections.add(socket)
           socket.run(factory.call(socket))
         ensure
+          @connections.delete(socket) if socket
           permit.try(&.release)
           io.close rescue nil
         end

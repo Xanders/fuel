@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.4 — composable listeners and ranking pages
+
+- `Runtime.listen` serves a prebound listener without installing process signals. Shutdown closes admitted and pre-authentication sockets and joins admitted requests and workers within a bounded deadline. A timeout is an explicit failure, never permission to close storage still owned by unfinished work.
+- Authenticated leaderboard pages include the player's own rank and best score outside the requested Top N. A trusted server reader can provide an application-defined public ranking projection through the same authentication and validation boundary. Existing leaderboard arrays remain unchanged.
+
 ## 0.3.3 — long-poll presence
 
 - Long-poll admission refreshes player activity once. Subsequent server-side checks preserve credential, membership and game authorization checks without renewing presence for a disconnected HTTP client. Ordinary snapshot requests still refresh activity. Wire-compatible with SDK 0.3.0.

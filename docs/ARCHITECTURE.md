@@ -14,6 +14,8 @@
 
 ## Storage contract
 
+Independent applications may compose prebound Runtime listeners in one process. Each retains its own namespace, sessions, origins and identity owner; the process coordinates signals and observes every listener's bounded shutdown completion before closing stores. This is local composition, not multi-instance routing. A trusted ranking reader may expose an explicitly designed public board across local namespaces while retaining source-qualified score ownership. See the [API lifecycle and ranking contracts](API.md).
+
 All active gameplay is RAM-only for every mode. No snapshot, command journal or checkpoint restores a session after restart. PostgreSQL stores permanent identity/bindings, progress, result receipts, scores, aggregate-rating source results, technical transfer state/rate counters, configured chat and optional analytics outbox. It does not store object positions or the current turn.
 
 A session has a random process-local ID and epoch. An unknown old session returns `session_lost`. A connection generation fences replaced sockets. Input sequence acknowledges transient inputs; it is not a persistent reward receipt.

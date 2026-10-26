@@ -11,11 +11,20 @@ module Fuel
     getter prefix : String
     property accepting : Proc(Bool) = -> { true }
 
+    def close
+      @sockets.close
+    end
+
+    def closed? : Bool
+      @sockets.closed? && @sockets.budget.active == 0
+    end
+
     def initialize(@store : Store, @sessions : Sessions, @origins : Array(String), @analytics : Questmetry? = nil,
                    censor = Censor.new([] of String), persisted_chat = [] of String,
                    @guild_access : Proc(String, String, Bool) = ->(actor : String, guild : String) { false },
                    @deletion_hook : Proc(DB::Connection, String, Nil)? = nil,
-                   @account_rules : AccountRules? = nil, @prefix : String = "/fuel/v1")
+                   @account_rules : AccountRules? = nil, @prefix : String = "/fuel/v1",
+                   @leaderboard_reader : LeaderboardReader? = nil)
       Fuel.check(@prefix.matches?(/\A(?:\/[a-zA-Z0-9_-]+)+\z/), "invalid_prefix")
       @sockets = SocketServer.new(@origins)
       names = ->(actor : String, state : JSON::Any) { @account_rules.try(&.display_name(actor, state)) || actor }
@@ -253,7 +262,15 @@ module Fuel
         when {"GET", "chat"}
           Fuel.json(@chat.history(actor, context.request.query_params["kind"], context.request.query_params["target"]? || ""))
         else
-          if parts.size == 2 && parts[0] == "leaderboards" && method == "GET"
+          if parts.size == 3 && parts[0] == "leaderboards" && parts[2] == "page" && method == "GET"
+            board = parts[1]
+            limit = context.request.query_params["limit"]?.try(&.to_i) || 100
+            Fuel.key(board)
+            Fuel.check((1..100).includes?(limit), "invalid_limit")
+            page = @leaderboard_reader.try(&.call(connection, @store.namespace, actor, board, limit)) || @store.leaderboard_page(connection, actor, board, limit)
+            Fuel.check(page.to_json.bytesize <= 65536, "too_large")
+            page
+          elsif parts.size == 2 && parts[0] == "leaderboards" && method == "GET"
             Fuel.json(@store.leaderboard(parts[1], context.request.query_params["limit"]?.try(&.to_i) || 100))
           elsif parts.size == 2 && parts[0] == "ratings" && method == "GET"
             Fuel.json(@store.ratings(parts[1], context.request.query_params["metric"]? || "wins", context.request.query_params["hours"]?.try(&.to_i) || 24))

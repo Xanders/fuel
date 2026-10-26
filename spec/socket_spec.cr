@@ -151,7 +151,45 @@ class AwaitedSetupPeer < SocketTestPeer
   end
 end
 
+class ClosingSetupPeer < SocketTestPeer
+  getter entered = Channel(Nil).new(1)
+  getter release = Channel(Nil).new(1)
+
+  def start(socket : Fuel::SocketConnection) : Nil
+    entered.send(nil)
+    release.receive
+    socket.check_open
+    super
+  end
+end
+
 describe Fuel::SocketServer do
+  it "closes pre-authentication sockets but retains their permits until setup exits" do
+    sockets = Fuel::SocketServer.new([] of String)
+    peer = ClosingSetupPeer.new
+    server = HTTP::Server.new { |context| sockets.upgrade(context) { |_| peer.as(Fuel::SocketPeer) } }
+    address = server.bind_tcp("127.0.0.1", 0)
+    spawn { server.listen }
+    socket = HTTP::WebSocket.new(address.address, "/socket", address.port)
+    begin
+      select
+      when peer.entered.receive
+      when timeout(1.second)
+        fail "pre-authentication setup did not start"
+      end
+      sockets.close
+      sockets.closed?.should be_true
+      sockets.budget.active.should eq(1)
+      sockets.connected?("account").should be_false
+      peer.release.send(nil)
+      100.times { break if sockets.budget.active == 0; sleep 1.millisecond }
+      sockets.budget.active.should eq(0)
+    ensure
+      peer.release.send(nil) if sockets.budget.active > 0
+      socket.close rescue nil
+      server.close
+    end
+  end
   [false, true].each do |native|
     it "waits for #{native ? "native authentication" : "initial"} post-admission setup before output" do
       sockets = Fuel::SocketServer.new([] of String, interval: 1.millisecond)

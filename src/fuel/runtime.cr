@@ -8,6 +8,12 @@ module Fuel
     @running = false
     @inflight = 0
     @workers = 0
+    @background = 0
+    @requests = 0
+    @started = false
+    @stopped = false
+    @failed = false
+    @stopping = Channel(Nil).new
     @effect_cursor = 0
     @mutex = Mutex.new
 
@@ -28,7 +34,10 @@ module Fuel
     end
 
     def resume
-      @mutex.synchronize { @accepting = true }
+      @mutex.synchronize do
+        Fuel.check(!@stopped, "runtime_closed")
+        @accepting = true
+      end
     end
 
     def health : JSON::Any
@@ -47,6 +56,26 @@ module Fuel
     end
 
     def call(context : HTTP::Server::Context)
+      stopped = @mutex.synchronize do
+        @requests += 1
+        @stopped
+      end
+      begin
+        if stopped
+          context.response.status_code = 503
+          context.response.content_type = "application/json"
+          context.response.headers["Cache-Control"] = "no-store"
+          context.response.headers["Connection"] = "close"
+          context.response.print({wire_version: 1, error: "maintenance"}.to_json)
+          return
+        end
+        dispatch(context)
+      ensure
+        @mutex.synchronize { @requests -= 1 }
+      end
+    end
+
+    private def dispatch(context : HTTP::Server::Context)
       if context.request.method == "GET" && context.request.path == "/health"
         state = health
         context.response.status_code = 503 unless state["database"].as_bool
@@ -118,39 +147,67 @@ module Fuel
     end
 
     def run(host = "0.0.0.0", port = 8080)
-      server.bind_tcp(host, port)
-      Signal::USR1.trap { drain }
-      Signal::USR2.trap { resume }
-      Signal::INT.trap { stop }
-      Signal::TERM.trap { stop }
-      @running = true
+      start_listening
+      begin
+        server.bind_tcp(host, port)
+        Signal::USR1.trap { drain }
+        Signal::USR2.trap { resume }
+        Signal::INT.trap { stop }
+        Signal::TERM.trap { stop }
+        listen_started(10.seconds)
+      ensure
+        stop
+      end
+    end
+
+    # Bind all application listeners first; the embedding process owns signals.
+    def listen(shutdown_timeout : Time::Span = 10.seconds)
+      Fuel.check(shutdown_timeout > Time::Span.zero, "invalid_limit")
+      start_listening
+      listen_started(shutdown_timeout)
+    end
+
+    private def start_listening
+      @mutex.synchronize do
+        Fuel.check(!@stopped, "runtime_closed")
+        Fuel.check(!@started, "runtime_started")
+        @started = true
+        @running = true
+      end
+    end
+
+    private def listen_started(shutdown_timeout : Time::Span)
       ticker = Ticker.new(@sessions)
-      spawn do
+      background do
         previous = Time.instant
         while @running
-          sleep 50.milliseconds
+          wait(50.milliseconds)
+          break unless @running
           now = Time.instant
           ticker.advance(now - previous)
           previous = now
         end
       end
-      spawn do
+      background do
         cleanup_at = Time.instant
         while @running
           pump_effects
           @sessions.cleanup
           if Time.instant >= cleanup_at
             cleanup_at = Time.instant + 1.hour
+            @mutex.synchronize { @inflight += 1 }
             begin
               @store.cleanup
             rescue
               STDERR.puts "Fuel storage cleanup postponed"
+            ensure
+              @mutex.synchronize { @inflight -= 1 }
             end
           end
-          sleep 250.milliseconds
+          wait(250.milliseconds)
         end
       end
-      spawn do
+      background do
         while @running
           if sink = @analytics
             stats = @sessions.stats
@@ -166,18 +223,53 @@ module Fuel
               end
             end
           end
-          sleep 2.seconds
+          wait(2.seconds)
         end
       end
       server.listen
     ensure
-      @running = false
+      stop
+      deadline = Time.instant + shutdown_timeout
+      until @mutex.synchronize { @background == 0 && @workers == 0 && @requests == 0 } && @handler.closed?
+        Fuel.check(Time.instant < deadline, "shutdown_timeout")
+        sleep 1.millisecond
+      end
+      Fuel.check(!@failed, "runtime_failed")
     end
 
     def stop
-      @running = false
-      drain
+      @mutex.synchronize do
+        @running = false
+        @accepting = false
+        unless @stopped
+          @stopped = true
+          @stopping.close
+        end
+      end
+      @handler.close
       server.close unless server.closed?
+    end
+
+    private def background(&block : ->)
+      @mutex.synchronize { @background += 1 }
+      spawn do
+        begin
+          block.call
+        rescue
+          @mutex.synchronize { @failed = true }
+          STDERR.puts "Fuel runtime worker failed"
+          stop
+        ensure
+          @mutex.synchronize { @background -= 1 }
+        end
+      end
+    end
+
+    private def wait(delay : Time::Span)
+      select
+      when @stopping.receive?
+      when timeout(delay)
+      end
     end
 
     private def static(context)
