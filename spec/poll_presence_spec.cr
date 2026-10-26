@@ -17,6 +17,14 @@ class PollPresenceRules < CounterRules
   end
 end
 
+class SettledPollPresenceRules < PollPresenceRules
+  def result(state : JSON::Any, actor : String) : Fuel::GameResult?
+    if state["value"].as_i >= 3
+      Fuel::GameResult.new("counter", 3_i64, "Player", JSON.parse(%({"completed":true})))
+    end
+  end
+end
+
 def poll_observation(rules)
   select
   when rules.observations.receive
@@ -27,35 +35,45 @@ end
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "long-poll presence" do
-    it "does not renew presence while rechecking a disconnected request" do
-      store = Fuel::Store.new(url, "poll_#{Fuel.id}", "d" * 32, "p" * 32)
-      store.migrate
-      credential = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
-      actor = store.bootstrap(credential, "test")
-      rules = PollPresenceRules.new
-      rooms = Fuel::Sessions.new(rules)
-      room = rooms.create(actor, "duel", 2)
-      rooms.join("other", room.id)
-      snapshot = room.snapshot(actor)
-      rules.watched = actor
-      server = HTTP::Server.new(Fuel::Handler.new(store, rooms, ["https://game.example"]))
-      address = server.bind_tcp("127.0.0.1", 0)
-      spawn { server.listen }
-      socket = TCPSocket.new(address.address, address.port)
-      begin
-        socket << "GET /fuel/v1/sessions/#{room.id}/events?cursor=#{snapshot["revision"].as_s}&epoch=#{room.epoch} HTTP/1.1\r\nHost: game.example\r\nAuthorization: Fuel #{credential.id}:#{credential.secret}\r\n\r\n"
-        socket.flush
-        poll_observation(rules)
-        socket.close
-        3.times { poll_observation(rules) }
-        room.snapshot("other")
-        room.expire_idle(150.milliseconds)
-        room.member?(actor).should be_false
-        room.member?("other").should be_true
-      ensure
-        socket.close unless socket.closed?
-        room.leave(actor, force: true)
-        server.close
+    [false, true].each do |settled|
+      it "does not renew a disconnected request (settled result: #{settled})" do
+        store = Fuel::Store.new(url, "poll_#{Fuel.id}", "d" * 32, "p" * 32)
+        store.migrate
+        credential = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+        actor = store.bootstrap(credential, "test")
+        rules = settled ? SettledPollPresenceRules.new : PollPresenceRules.new
+        rooms = Fuel::Sessions.new(rules)
+        room = rooms.create(actor, "duel", 2)
+        rooms.join("other", room.id)
+        if settled
+          room.command(actor, room.epoch, "finish", room.snapshot(actor)["revision"].as_s.to_i64, Fuel.json({amount: 3}))
+          room.persist_result(store, credential)
+        end
+        snapshot = room.snapshot(actor)
+        rules.watched = actor
+        server = HTTP::Server.new(Fuel::Handler.new(store, rooms, ["https://game.example"]))
+        address = server.bind_tcp("127.0.0.1", 0)
+        spawn { server.listen }
+        socket = TCPSocket.new(address.address, address.port)
+        begin
+          socket << "GET /fuel/v1/sessions/#{room.id}/events?cursor=#{snapshot["revision"].as_s}&epoch=#{room.epoch} HTTP/1.1\r\nHost: game.example\r\nAuthorization: Fuel #{credential.id}:#{credential.secret}\r\n\r\n"
+          socket.flush
+          poll_observation(rules)
+          socket.close
+          3.times { poll_observation(rules) }
+          if settled
+            room.ready("other")
+            2.times { poll_observation(rules) }
+          end
+          room.snapshot("other")
+          room.expire_idle(150.milliseconds)
+          room.member?(actor).should be_false
+          room.member?("other").should be_true
+        ensure
+          socket.close unless socket.closed?
+          room.leave(actor, force: true)
+          server.close
+        end
       end
     end
 

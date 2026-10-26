@@ -393,7 +393,7 @@ module Fuel
       return if @mutex.synchronize { @results.empty? }
       actor = store.authenticate(credential)
       result = @mutex.synchronize do
-        authorize(actor)
+        authorize(actor, refresh_activity: false)
         @settled.includes?(actor) ? nil : @results[actor]?
       end
       return unless result
