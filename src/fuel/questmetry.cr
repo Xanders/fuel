@@ -3,26 +3,31 @@ require "http/client"
 module Fuel
   class Questmetry
     @send : Proc(String, Int32)
+    @client_events : Set(String)
     getter omitted = 0_i64
 
     def initialize(@store : Store, @events : Hash(String, Array(String)), @environment : String, @version : String,
                    @pseudonym_key : String? = nil, @max_pending = 10000,
                    @validate : Proc(String, JSON::Any, Bool) = ->(name : String, properties : JSON::Any) { true },
-                   @context : JSON::Any = JSON.parse("{}"), @playtest : String? = nil, &@send : String -> Int32)
+                   @context : JSON::Any = JSON.parse("{}"), @playtest : String? = nil,
+                   client_events : Array(String) = [] of String, &@send : String -> Int32)
       Fuel.key(@environment)
       Fuel.check(@version.matches?(/\A[a-zA-Z0-9.+_-]{1,80}\z/) && @max_pending > 0, "invalid_analytics_config")
       Fuel.check(@pseudonym_key.nil? || @pseudonym_key.not_nil!.bytesize >= 32, "invalid_server_keys")
       Fuel.check(@context.to_json.bytesize <= 2048 && @context.raw.is_a?(Hash), "invalid_analytics_config")
       Fuel.check(@playtest.nil? || @playtest.not_nil!.matches?(/\A[a-zA-Z0-9_-]{1,80}\z/), "invalid_analytics_config")
+      Fuel.check(client_events.all? { |name| @events.has_key?(name) }, "invalid_analytics_config")
+      @client_events = client_events.to_set
     end
 
     def self.http(store : Store, events : Hash(String, Array(String)), environment : String, version : String, endpoint : String, write_key : String,
                   pseudonym_key : String? = nil, validate : Proc(String, JSON::Any, Bool) = ->(name : String, properties : JSON::Any) { true },
-                  context : JSON::Any = JSON.parse("{}"), playtest : String? = nil) : Questmetry
+                  context : JSON::Any = JSON.parse("{}"), playtest : String? = nil,
+                  client_events : Array(String) = [] of String) : Questmetry
       uri = URI.parse(endpoint)
       Fuel.check(uri.scheme == "https" && !uri.host.nil? && uri.user.nil? && uri.password.nil? && uri.path.in?("", "/") && uri.query.nil? && uri.fragment.nil?, "invalid_endpoint")
       Fuel.check(write_key.starts_with?("qm_") && write_key.size > 3 && write_key.each_char.none?(&.control?), "invalid_analytics_config")
-      new(store, events, environment, version, pseudonym_key: pseudonym_key, validate: validate, context: context, playtest: playtest) do |body|
+      new(store, events, environment, version, pseudonym_key: pseudonym_key, validate: validate, context: context, playtest: playtest, client_events: client_events) do |body|
         client = HTTP::Client.new(uri)
         client.connect_timeout = 3.seconds
         client.read_timeout = 3.seconds
@@ -39,11 +44,17 @@ module Fuel
       @store.with_actor(credential) { |c, account| enqueue(c, account, id, name, session, properties, occurred_at, revision) }
     end
 
+    def capture_client(credential : Credential, id : String, name : String, session : String, properties : JSON::Any, revision : Int64) : String
+      Fuel.check(@client_events.includes?(name) && revision >= 0, "invalid_event")
+      @store.with_actor(credential) { |c, account| enqueue(c, account, id, name, session, properties, revision: revision, source: "client") }
+    end
+
     # Use inside record_result's effect block for atomic result/event creation.
-    def enqueue(c : DB::Connection, account : String, id : String, name : String, session : String, properties : JSON::Any, occurred_at : Time = Time.utc, revision : Int64? = nil) : String
+    def enqueue(c : DB::Connection, account : String, id : String, name : String, session : String, properties : JSON::Any, occurred_at : Time = Time.utc, revision : Int64? = nil, source : String = "server") : String
       Fuel.key(id)
       Fuel.key(name)
       Fuel.check(session.bytesize <= 200, "invalid_event")
+      Fuel.check(source.in?("server", "client"), "invalid_event")
       allowed = @events[name]?
       Fuel.check(!allowed.nil? && properties.as_h.keys.all? { |k| allowed.not_nil!.includes?(k) }, "invalid_event")
       Fuel.check(properties.to_json.bytesize <= 2048 && properties.as_h.values.all? { |v| v.raw.is_a?(String) || v.raw.is_a?(Bool) || v.raw.is_a?(Int64) }, "invalid_event")
@@ -60,7 +71,7 @@ module Fuel
         return "capacity"
       end
       body = Fuel.json({event_id: id, name: name, schema_version: 1, occurred_at: occurred_at.to_rfc3339,
-                        source: "server", environment: @environment, app_version: @version,
+                        source: source, environment: @environment, app_version: @version,
                         anonymous_id: pseudonym("account", account), session_id: pseudonym("session", {account, session}.to_json), properties: properties, context: @context})
       body.as_h["playtest_id"] = JSON::Any.new(@playtest.not_nil!) if @playtest
       body.as_h.delete("session_id") if session.empty?

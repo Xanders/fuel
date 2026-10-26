@@ -42,6 +42,14 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
         page["entries"][0]["is_player"].as_bool.should be_false
         response.body.should_not contain(actor)
         client.get("/fuel/v1/leaderboards/classic/page?limit=0", headers).status_code.should eq(400)
+        10.times do |index|
+          proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+          store.bootstrap(proof, "crowd")
+          store.record_result(proof, Fuel.id, "classic", 100_i64 + index, "Crowd Owl", JSON.parse("{}"))
+        end
+        leaders = JSON.parse(client.get("/fuel/v1/leaderboards/classic/page?limit=3", headers).body)["data"]["entries"].as_a
+        leaders.map { |entry| entry["rank"].as_s }.should eq(["1", "2", "3"])
+        leaders.map { |entry| entry["score"].as_s }.should eq(["109", "108", "107"])
       ensure
         client.close
         server.close

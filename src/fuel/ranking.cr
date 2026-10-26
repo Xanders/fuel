@@ -11,7 +11,7 @@ module Fuel
           FROM fuel_scores WHERE ns=$1 AND board=$2
         ), page AS (
           SELECT rank::text,name,score::text,account=$3 AS is_player
-          FROM ranked ORDER BY rank LIMIT $4
+          FROM ranked ORDER BY ranked.rank LIMIT $4
         )
         SELECT json_build_object(
           'entries',COALESCE((SELECT json_agg(row_to_json(page) ORDER BY rank::bigint) FROM page),'[]'::json),

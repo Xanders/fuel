@@ -218,6 +218,11 @@ module Fuel
         @chat.remove_account(account)
         clear_deleted_cookies(context, result)
         return result
+      elsif method == "POST" && path == "analytics/events"
+        analytics = @analytics || raise Error.new("not_configured")
+        status = analytics.capture_client(credential, data["id"].as_s, data["name"].as_s,
+          data["session"].as_s, data["properties"], data["revision"].as_s.to_i64)
+        return Fuel.json({status: status})
       elsif method == "POST" && path == "analytics/enabled"
         analytics = @analytics || raise Error.new("not_configured")
         account = @store.authenticate(credential)
@@ -313,6 +318,7 @@ module Fuel
         deadline = Time.instant + 15.seconds
         refresh_activity = true
         loop do
+          Fuel.check(!@sockets.closed?, "maintenance")
           state = @store.with_accounts(credential, [] of String, @account_rules) do |_, actor, profiles, preferences|
             room = @sessions.get(session)
             room.preference(actor, preferences[actor])

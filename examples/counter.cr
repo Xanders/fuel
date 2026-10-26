@@ -37,8 +37,6 @@ accounts = CounterAccounts.new
 handler = Fuel::Handler.new(store, sessions, origins, account_rules: accounts)
 runtime = Fuel::Runtime.new(store, sessions, handler, accounts)
 puts "Fuel #{Fuel::VERSION} counter sample listening"
-begin
-  runtime.run("0.0.0.0", ENV.fetch("PORT", "8080").to_i)
-ensure
-  store.close
-end
+runtime.run("0.0.0.0", ENV.fetch("PORT", "8080").to_i)
+# A failed shutdown join must not close storage still owned by admitted work.
+store.close

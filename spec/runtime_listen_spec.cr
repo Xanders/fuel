@@ -41,8 +41,65 @@ class StoppedProbeStore < Fuel::Store
   end
 end
 
+class PollListenStore < Fuel::Store
+  getter entered = Channel(Nil).new(1)
+  getter reads = 0
+
+  def with_accounts(credential : Fuel::Credential, participants : Array(String), rules : Fuel::AccountRules?, &)
+    super(credential, participants, rules) do |connection, actor, profiles, preferences|
+      @reads += 1
+      entered.send(nil) if @reads == 1
+      yield connection, actor, profiles, preferences
+    end
+  end
+end
+
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "composable runtime listener" do
+    it "cancels an unchanged long poll before its next storage revalidation during shutdown" do
+      store = PollListenStore.new(url, "poll_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      actor = store.bootstrap(proof, "fixture")
+      sessions = Fuel::Sessions.new(ListenRules.new)
+      room = sessions.create(actor, "fixture", capacity: 1, preferences: {actor => 0_i64})
+      state = room.snapshot(actor)
+      accounts = ListenAccounts.new
+      runtime = Fuel::Runtime.new(store, sessions, Fuel::Handler.new(store, sessions, [] of String, account_rules: accounts), accounts)
+      address = runtime.server.bind_tcp("127.0.0.1", 0)
+      completed = Channel(String).new(1)
+      response = Channel(Int32).new(1)
+      client = HTTP::Client.new(address.address, address.port)
+      spawn do
+        runtime.listen(shutdown_timeout: 500.milliseconds)
+        completed.send("joined")
+      rescue error
+        completed.send(error.message.to_s)
+      end
+      spawn do
+        path = "/fuel/v1/sessions/#{room.id}/events?epoch=#{room.epoch}&cursor=#{state["revision"].as_s}"
+        response.send(client.get(path, HTTP::Headers{"Authorization" => "Fuel #{proof.id}:#{proof.secret}"}).status_code)
+      end
+      begin
+        store.entered.receive
+        sleep 10.milliseconds
+        runtime.stop
+        select
+        when result = completed.receive
+          result.should eq("joined")
+        when timeout(2.seconds)
+          fail "an ordinary poll exceeded the shutdown deadline"
+        end
+        response.receive.should eq(503)
+        store.reads.should eq(1)
+      ensure
+        runtime.stop
+        # Keep storage alive even when the candidate fails its join contract.
+        sleep 15.seconds unless runtime.health["inflight"].as_i == 0
+        client.close
+        store.close
+      end
+    end
     it "never admits a late accepted HTTP request to storage after stop" do
       store = StoppedProbeStore.new(url, "late_#{Fuel.id}", "d" * 32, "p" * 32)
       sessions = Fuel::Sessions.new(ListenRules.new)
