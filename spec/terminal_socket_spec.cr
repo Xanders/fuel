@@ -1,4 +1,34 @@
 require "./session_spec"
+require "./socket_spec"
+
+class TerminalPongIO < StalledSocketIO
+  getter output = IO::Memory.new
+  getter flushed = Channel(Nil).new(8)
+  getter pong_entered = Channel(Nil).new(1)
+  getter release_pong = Channel(Nil).new(1)
+  property pause_pong = false
+
+  def write(slice : Bytes) : Nil
+    @output.write(slice)
+    if @pause_pong && slice.size == 1 && slice[0] == 0x8a
+      @pause_pong = false
+      @pong_entered.send(nil)
+      @release_pong.receive
+    end
+  end
+
+  def flush : Nil
+    @flushed.send(nil)
+  end
+end
+
+private def terminal_signal(channel : Channel(Nil))
+  select
+  when channel.receive
+  when timeout(3.seconds)
+    raise "Timed out waiting for the socket writer"
+  end
+end
 
 class FiniteSocketRules < CounterRules
   def finished?(state : JSON::Any) : Bool
@@ -23,6 +53,43 @@ private def terminal_frame(socket : HTTP::WebSocket) : JSON::Any?
 end
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
+  it "keeps the late-input reader from interleaving a final snapshot with a partially written pong" do
+    store = Fuel::Store.new(url, "terminal_pong_#{Fuel.id}", "d" * 32, "p" * 32)
+    store.migrate
+    proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+    actor = store.bootstrap(proof, "test")
+    sessions = Fuel::Sessions.new(FiniteSocketRules.new)
+    room = sessions.create(actor, "solo", 1)
+    server = Fuel::SocketServer.new([] of String)
+    io = TerminalPongIO.new
+    connection = Fuel::SocketConnection.new(io, server.budget.reserve, server, 100.milliseconds, 3.seconds, 16384)
+    peer = Fuel::SessionSocketPeer.new(store, sessions, proof, room.id, server.limiter, nil)
+    done = Channel(Nil).new(1)
+    spawn { connection.run(peer); done.send(nil) }
+    begin
+      terminal_signal(io.flushed)
+      room.command(actor, room.epoch, "finish", 0_i64, Fuel.json({amount: 1}))
+      io.output.clear
+      io.pause_pong = true
+      connection.enqueue("probe", pong: true)
+      terminal_signal(io.pong_entered)
+      peer.message(connection, {epoch: room.epoch, sequence: "1", action: {amount: 100}}.to_json)
+      io.output.size.should eq(1)
+      io.output.to_slice[0].should eq(0x8a)
+      room.snapshot(actor)["state"]["value"].as_i.should eq(1)
+      io.release_pong.send(nil)
+      terminal_signal(io.flushed)
+    ensure
+      select
+      when io.release_pong.send(nil)
+      else
+      end
+      connection.close
+      terminal_signal(done)
+      store.close
+    end
+  end
+
   it "refreshes a final private snapshot for late input without applying it or hiding a lost epoch" do
     store = Fuel::Store.new(url, "terminal_socket_#{Fuel.id}", "d" * 32, "p" * 32)
     store.migrate

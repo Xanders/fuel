@@ -37,7 +37,7 @@ module Fuel
       end
     rescue error : Error
       raise error unless error.code == "session_ended"
-      send_snapshot(socket)
+      # The existing writer publishes the final snapshot; the reader must not write.
     end
 
     def send_message(socket : SocketConnection, raw : String) : Nil
