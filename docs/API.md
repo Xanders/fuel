@@ -27,7 +27,7 @@ Native credentials use `Authorization: Fuel <binding-id>:<secret>` over TLS. Bro
 | POST | auth/pair/approve | `{id}`; owner confirms the displayed exact request |
 | POST | auth/pair/cancel | `{id}`; cancel an own pending request |
 | GET | auth/pair/status | Candidate's pending/linked/expired/cancelled status |
-| GET | auth/selection | Browser current/previous public binding/account metadata and candidate public ID |
+| GET | auth/selection | Read-only browser current/previous public metadata and candidate ID. A rejected current proof retains its binding ID with null account_id; rejected previous is null. No cookie is cleared |
 | POST | auth/pair/activate | `{target_id}`; adopt the frozen linked candidate and retain the previous guest |
 | POST | auth/switch | `{from,to}` binding IDs; `from:null` permits selecting a surviving previous proof; repeating an already-selected target does not toggle |
 | POST | sessions | `{mode,capacity,public,late_join}`; ID, epoch and private invite code; configured mode policy owns actual capacity/policy |
@@ -68,6 +68,7 @@ A durable operation contains `operation_id,cursor,source,session_id,epoch,action
 ## Recovery and authority
 
 - `unauthorized/selection_changed`: stop private activity and reconcile the saved identity; never bootstrap a replacement guest automatically.
+- `connection_replaced`: another socket took this player's place in the same room. The old socket receives this error envelope before closing; stop automatic reconnection and wait for an explicit reconnect. Membership and RAM state remain. Use a matching SDK; older clients cannot yield this way.
 - `session_lost/session_ended`: abandon old RAM commands. Offer a deliberate new session; permanent progress and committed receipts remain.
 - `saving_backlog/pending_result`: accepted work remains queued. Pause new play/admission until it settles. A quarantine is visible through effect_error/health and requires fixing its cause.
 - `revision_conflict/conflict`: fetch current state or reconcile the exact original operation. Do not change its ID or silently rebase an uncertain intent.

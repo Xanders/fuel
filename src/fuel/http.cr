@@ -92,20 +92,21 @@ module Fuel
         current = read_credential(context)
         previous = read_credential(context, "__Host-fuel-previous")
         candidate = read_credential(context, "__Host-fuel-candidate")
-        selection = ->(proof : Credential?, slot : String) do
+        selection = ->(proof : Credential?, current_slot : Bool) do
           if proof
             begin
               Fuel.json({binding_id: proof.id, account_id: @store.authenticate(proof)})
             rescue error : Error
               raise error unless error.code == "unauthorized"
-              clear_cookie(context, slot)
-              JSON.parse("null")
+              # Keep rejected active proof: clearing it turns a later ordinary
+              # prepare/bootstrap into an unintended replacement guest.
+              current_slot ? Fuel.json({binding_id: proof.id, account_id: nil}) : JSON.parse("null")
             end
           else
             JSON.parse("null")
           end
         end
-        reply(context, Fuel.json({current: selection.call(current, "__Host-fuel"), previous: selection.call(previous, "__Host-fuel-previous"), candidate_id: candidate.try(&.id)}))
+        reply(context, Fuel.json({current: selection.call(current, true), previous: selection.call(previous, false), candidate_id: candidate.try(&.id)}))
         return
       elsif path == "/fuel/v1/auth/switch" && context.request.method == "POST"
         current = read_credential(context)

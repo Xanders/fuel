@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.7 — device handoff without reconnect contention
+
+Canonical room sockets now send `connection_replaced` before detaching a displaced connection. SDK0.3.6 yields automatic reconnection while retaining the room for explicit reclaim. Transient inputs on the displaced socket do not race the single writer's notification. Other authorization and IO failures still fail closed.
+
+Browser selection reads no longer clear rejected cookies. A rejected current proof exposes its public binding ID with null account metadata, preserving explicit previous-account selection and preventing ordinary startup from creating an unintended replacement guest. Explicit new-guest recovery remains unchanged. No database migration or new dependency.
+
 ## 0.3.6 — explicit browser guest recovery
 
 `auth/prepare?new=true` replaces an existing active browser proof only when authentication definitively rejects it. A valid proof, retained previous account and transfer candidate survive. Ordinary preparation and database failures never rotate a proof. This enables SDK0.3.5's explicit browser new-guest action after revocation; no schema change is required.

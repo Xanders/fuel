@@ -39,6 +39,34 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
         store.revoke(Fuel::Credential.new(id, secret), id, confirmed_last: true)
         client.get("/fuel/v1/auth/prepare", headers).headers.has_key?("Set-Cookie").should be_false
         client.post("/fuel/v1/auth/bootstrap", headers, "{}").status_code.should eq(401)
+        # Apply response cookies as a browser does: a read-only availability hint
+        # must not erase the rejected proof and make ordinary startup a new guest.
+        cookies = headers["Cookie"].split("; ").map { |entry| entry.split('=', 2) }.to_h
+        hint = client.get("/fuel/v1/auth/selection", headers)
+        apply_cookies = ->(response : HTTP::Client::Response) {
+          (response.headers.get?("Set-Cookie") || [] of String).each do |entry|
+            key, value = entry.split(';').first.split('=', 2)
+            if entry.includes?("Max-Age=0")
+              cookies.delete(key)
+            else
+              cookies[key] = value
+            end
+          end
+          headers["Cookie"] = cookies.map { |key, value| "#{key}=#{value}" }.join("; ")
+        }
+        apply_cookies.call(hint)
+        apply_cookies.call(client.get("/fuel/v1/auth/prepare", headers))
+        client.post("/fuel/v1/auth/bootstrap", headers, "{}").status_code.should eq(401)
+        hint.headers.has_key?("Set-Cookie").should be_false
+        selected_hint = JSON.parse(hint.body)["data"]
+        selected_hint["current"]["binding_id"].as_s.should eq(id)
+        selected_hint["current"]["account_id"].raw.should be_nil
+        selected_hint["previous"]["account_id"].as_s.should eq(previous_account)
+        # Explicitly selecting the surviving previous account remains available.
+        switched = client.post("/fuel/v1/auth/switch", headers, {from: id, to: previous_value.split(':', 2)[0]}.to_json)
+        switched.status_code.should eq(200)
+        JSON.parse(switched.body)["data"]["account_id"].as_s.should eq(previous_account)
+        # Retain the original jar here to exercise explicit new-guest recovery.
         hostile = headers.dup
         hostile["Origin"] = "https://attacker.example"
         client.get("/fuel/v1/auth/prepare?new=true", hostile).status_code.should eq(403)

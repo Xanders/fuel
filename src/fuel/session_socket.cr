@@ -36,8 +36,8 @@ module Fuel
         room.input(actor, @generation.not_nil!, data["sequence"].as_s.to_i64, data["action"], progress: profiles[actor])
       end
     rescue error : Error
-      raise error unless error.code == "session_ended"
-      # The existing writer publishes the final snapshot; the reader must not write.
+      raise error unless error.code.in?("session_ended", "stale_connection")
+      # The single writer publishes final state or replacement; the reader must not write.
     end
 
     def send_message(socket : SocketConnection, raw : String) : Nil
@@ -46,6 +46,8 @@ module Fuel
         @room.not_nil!.check(actor, @generation, profiles[actor])
         socket.write(raw)
       end
+    rescue error : Error
+      replacement(socket, error)
     end
 
     def send_snapshot(socket : SocketConnection) : Nil
@@ -57,6 +59,15 @@ module Fuel
         socket.write({wire_version: 1, account_id: actor, generation: @generation, data: state}.to_json)
       end
       room.persist_result(@store, @credential, @analytics)
+    rescue error : Error
+      replacement(socket, error)
+    end
+
+    private def replacement(socket : SocketConnection, error : Error) : Nil
+      if error.code == "stale_connection"
+        socket.write({wire_version: 1, error: "connection_replaced"}.to_json)
+      end
+      raise error
     end
 
     def closed(socket : SocketConnection) : Nil

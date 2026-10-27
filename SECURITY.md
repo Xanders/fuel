@@ -27,3 +27,5 @@ Only Fuel-owned data is purged by the default deletion route. The consuming appl
 Browser Fetch Metadata also rejects cross-site/same-site API requests outside the same origin, including cookie preparation. An unrelated navigation cannot replace an existing Strict cookie merely because the browser omitted it on that request. Native clients without browser Fetch Metadata still require their own proof.
 
 Explicit browser guest recovery replaces only a definitively rejected active proof through `auth/prepare?new=true`, under the same Origin/Fetch Metadata checks. Valid active proofs and the previous/candidate slots are preserved. Ordinary preparation and storage failures do not rotate existing proofs.
+
+Reading browser selection does not mutate cookies, including rejected proofs. A rejected current binding exposes only its own public ID with null account metadata, so an explicit previous-account switch can still freeze its source. Removing that proof during an availability check would let later ordinary bootstrap create an unintended replacement guest.
