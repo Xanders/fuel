@@ -16,6 +16,56 @@ end
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "canonical account HTTP" do
+    it "recovers an explicitly requested browser guest only from a rejected binding" do
+      store = Fuel::Store.new(url, "http_guest_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      server = HTTP::Server.new(Fuel::Handler.new(store, Fuel::Sessions.new(AccountSessionRules.new), ["https://game.example"]))
+      address = server.bind_tcp("127.0.0.1", 0)
+      spawn { server.listen }
+      client = HTTP::Client.new(address.address, address.port)
+      begin
+        active = client.get("/fuel/v1/auth/prepare").headers["Set-Cookie"].split(';').first
+        headers = HTTP::Headers{"Cookie" => active, "Origin" => "https://game.example"}
+        original = JSON.parse(client.post("/fuel/v1/auth/bootstrap", headers, "{}").body)["data"]["account_id"].as_s
+        previous = client.get("/fuel/v1/auth/prepare").headers["Set-Cookie"].split(';').first
+        previous_headers = HTTP::Headers{"Cookie" => previous, "Origin" => "https://game.example"}
+        previous_account = JSON.parse(client.post("/fuel/v1/auth/bootstrap", previous_headers, "{}").body)["data"]["account_id"].as_s
+        name, previous_value = previous.split('=', 2)
+        headers["Cookie"] = "#{active}; #{name}-previous=#{previous_value}"
+        # An explicit recovery must not replace a still-valid account.
+        client.get("/fuel/v1/auth/prepare?new=true", headers).headers.has_key?("Set-Cookie").should be_false
+        JSON.parse(client.post("/fuel/v1/auth/bootstrap", headers, "{}").body)["data"]["account_id"].as_s.should eq(original)
+        id, secret = active.split('=', 2)[1].split(':', 2)
+        store.revoke(Fuel::Credential.new(id, secret), id, confirmed_last: true)
+        client.get("/fuel/v1/auth/prepare", headers).headers.has_key?("Set-Cookie").should be_false
+        client.post("/fuel/v1/auth/bootstrap", headers, "{}").status_code.should eq(401)
+        hostile = headers.dup
+        hostile["Origin"] = "https://attacker.example"
+        client.get("/fuel/v1/auth/prepare?new=true", hostile).status_code.should eq(403)
+        recovered = client.get("/fuel/v1/auth/prepare?new=true", headers)
+        recovered.headers.has_key?("Set-Cookie").should be_true
+        recovered.headers.get("Set-Cookie").none? { |entry| entry.starts_with?("#{name}-previous=") }.should be_true
+        replacement = recovered.headers["Set-Cookie"].split(';').first
+        replacement.should_not eq(active)
+        headers["Cookie"] = "#{replacement}; #{name}-previous=#{previous_value}"
+        created = client.post("/fuel/v1/auth/bootstrap", headers, "{}")
+        created.status_code.should eq(200)
+        account = JSON.parse(created.body)["data"]["account_id"].as_s
+        account.should_not eq(original)
+        account.should_not eq(previous_account)
+        fresh_id = replacement.split('=', 2)[1].split(':', 2)[0]
+        selected = client.post("/fuel/v1/auth/switch", headers, {from: fresh_id, to: previous_value.split(':', 2)[0]}.to_json)
+        selected.status_code.should eq(200)
+        JSON.parse(selected.body)["data"]["account_id"].as_s.should eq(previous_account)
+        headers["Cookie"] = active
+        client.post("/fuel/v1/auth/bootstrap", headers, "{}").status_code.should eq(401)
+      ensure
+        client.close
+        server.close
+        store.close
+      end
+    end
+
     it "clears only deleted browser bindings, including recovery after a lost response" do
       store = Fuel::Store.new(url, "http_delete_#{Fuel.id}", "d" * 32, "p" * 32)
       store.migrate

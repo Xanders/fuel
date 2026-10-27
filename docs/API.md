@@ -8,7 +8,7 @@ Native credentials use `Authorization: Fuel <binding-id>:<secret>` over TLS. Bro
 
 | Method | Path | Contract |
 |---|---|---|
-| GET | auth/prepare | Prepare a browser proof without creating a database account |
+| GET | auth/prepare | Prepare a browser proof without creating a database account; explicit `new=true` replaces only a definitively unauthorized active proof, retaining previous/candidate slots |
 | POST | auth/bootstrap | Idempotent guest creation/restoration using the saved proof |
 | GET | account | `{account_id,progress,analytics_enabled,analytics_revision,server_time}`; pure game initialization/refresh runs transactionally |
 | POST | actions | `{id,action,payload}`; game public allowlist, atomic permanent action and durable receipt |

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.6 — explicit browser guest recovery
+
+`auth/prepare?new=true` replaces an existing active browser proof only when authentication definitively rejects it. A valid proof, retained previous account and transfer candidate survive. Ordinary preparation and database failures never rotate a proof. This enables SDK0.3.5's explicit browser new-guest action after revocation; no schema change is required.
+
 ## 0.3.5 — account consent without an analytics adapter
 
 Analytics consent remains available when optional delivery is not configured. The account store owns the revisioned choice and retained outbox purge; `Questmetry#enabled` delegates to that same transaction and delivery fence. The HTTP endpoint no longer rejects this account operation as `not_configured`. Event submission still requires an adapter. Wire-compatible with SDK0.3.4.

@@ -75,6 +75,13 @@ module Fuel
             raise error unless ["unauthorized", "invalid_code"].includes?(error.code)
           end
           credential = Credential.new(Fuel.id, Random::Secure.hex(32)) if renew
+        elsif existing && context.request.query_params["new"]? == "true"
+          begin
+            @store.authenticate(existing)
+          rescue error : Fuel::Error
+            raise error unless error.code == "unauthorized"
+            credential = Credential.new(Fuel.id, Random::Secure.hex(32))
+          end
         end
         cookie(context, credential, slot) if existing.nil? || credential.id != existing.id
         reply(context, Fuel.json({status: "prepared"}))

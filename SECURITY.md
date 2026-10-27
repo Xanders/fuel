@@ -25,3 +25,5 @@ Long polls revalidate after waits; sockets revalidate before inputs and snapshot
 Only Fuel-owned data is purged by the default deletion route. The consuming application must include all additional data owners and provider obligations in its deletion workflow. No payment integration is implemented in this preview.
 
 Browser Fetch Metadata also rejects cross-site/same-site API requests outside the same origin, including cookie preparation. An unrelated navigation cannot replace an existing Strict cookie merely because the browser omitted it on that request. Native clients without browser Fetch Metadata still require their own proof.
+
+Explicit browser guest recovery replaces only a definitively rejected active proof through `auth/prepare?new=true`, under the same Origin/Fetch Metadata checks. Valid active proofs and the previous/candidate slots are preserved. Ordinary preparation and storage failures do not rotate existing proofs.
