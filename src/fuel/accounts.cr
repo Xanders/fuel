@@ -175,6 +175,17 @@ module Fuel
       end
     end
 
+    # Consent survives temporarily disabling the optional delivery adapter.
+    def analytics_enabled(credential : Credential, value : Bool) : Int64
+      with_analytics_delivery do
+        with_actor(credential) do |c, account|
+          c.exec("UPDATE fuel_accounts SET analytics_enabled=$3,analytics_revision=analytics_revision+1 WHERE ns=$1 AND id=$2 AND analytics_enabled<>$3", @namespace, account, value)
+          c.exec("DELETE FROM fuel_outbox WHERE ns=$1 AND account=$2", @namespace, account) unless value
+          c.query_one("SELECT analytics_revision FROM fuel_accounts WHERE ns=$1 AND id=$2", @namespace, account, as: Int64)
+        end
+      end
+    end
+
     def execute(credential : Credential, id : String, action : String, payload : JSON::Any, rules : AccountRules, analytics : Questmetry? = nil) : JSON::Any
       Fuel.check(!action.starts_with?("_fuel_") && rules.public_action?(action), "forbidden")
       perform_operation(id, action, payload, rules, credential: credential, analytics: analytics)

@@ -88,13 +88,7 @@ module Fuel
     end
 
     def enabled(credential : Credential, value : Bool) : Int64
-      @store.with_analytics_delivery do
-        @store.with_actor(credential) do |c, account|
-          c.exec("UPDATE fuel_accounts SET analytics_enabled=$3,analytics_revision=analytics_revision+1 WHERE ns=$1 AND id=$2 AND analytics_enabled<>$3", @store.namespace, account, value)
-          c.exec("DELETE FROM fuel_outbox WHERE ns=$1 AND account=$2", @store.namespace, account) unless value
-          c.query_one("SELECT analytics_revision FROM fuel_accounts WHERE ns=$1 AND id=$2", @store.namespace, account, as: Int64)
-        end
-      end
+      @store.analytics_enabled(credential, value)
     end
 
     def halted : Int64

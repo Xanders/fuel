@@ -50,7 +50,7 @@ Native credentials use `Authorization: Fuel <binding-id>:<secret>` over TLS. Bro
 | GET | leaderboards/:board?limit=100 | Best authoritative score/player; descending score then earliest achievement/account |
 | GET | leaderboards/:board/page?limit=100 | Public `entries` and the authenticated player's own `player_rank`/`player_best`, including outside the page |
 | GET | ratings/:board?metric=wins&hours=24 | wins, battles or win_ratio; draws count as battles, outside win-ratio denominator |
-| POST | analytics/enabled | `{enabled:false}`; confirmed revision, requires configured analytics |
+| POST | analytics/enabled | `{enabled:false}`; confirmed account consent revision, available without an analytics adapter |
 | POST | analytics/events | `{id,name,session,properties:{...},revision:"0"}`; explicitly allowlisted client UI telemetry, requires configured analytics |
 
 ## Snapshots and receipts

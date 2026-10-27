@@ -224,9 +224,8 @@ module Fuel
           data["session"].as_s, data["properties"], data["revision"].as_s.to_i64)
         return Fuel.json({status: status})
       elsif method == "POST" && path == "analytics/enabled"
-        analytics = @analytics || raise Error.new("not_configured")
         account = @store.authenticate(credential)
-        revision = analytics.enabled(credential, data["enabled"].as_bool)
+        revision = @store.analytics_enabled(credential, data["enabled"].as_bool)
         @sessions.preference(account, revision)
         return Fuel.json({status: "updated", enabled: data["enabled"], revision: revision.to_s})
       elsif method == "GET" && path == "chat/mutes"

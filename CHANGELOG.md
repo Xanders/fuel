@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.5 — account consent without an analytics adapter
+
+Analytics consent remains available when optional delivery is not configured. The account store owns the revisioned choice and retained outbox purge; `Questmetry#enabled` delegates to that same transaction and delivery fence. The HTTP endpoint no longer rejects this account operation as `not_configured`. Event submission still requires an adapter. Wire-compatible with SDK0.3.4.
+
 ## 0.3.4 — composable listeners and ranking pages
 
 - `Runtime.listen` serves a prebound listener without installing process signals. Shutdown closes admitted and pre-authentication sockets and joins admitted requests and workers within a bounded deadline. A timeout is an explicit failure, never permission to close storage still owned by unfinished work.
