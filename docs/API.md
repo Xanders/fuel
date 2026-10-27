@@ -2,6 +2,8 @@
 
 Fuel 0.3 is an experimental API; pin the server and SDK to the same reviewed release. `wire_version: 1` identifies the envelope, not compatibility with every earlier development API. The default prefix is `/fuel/v1`; `Handler(prefix: ...)` and the SDK base URI can select another application prefix.
 
+Fuel0.3.8 is wire-compatible with SDK0.3.7.
+
 Success is `{"wire_version":1,"data":...}` and error is `{"wire_version":1,"error":"code"}`. Send `X-Fuel-Version: 1`. Revisions, sequences, receipt cursors, scores and counts are decimal strings; Unix timestamps are integers. Global operation cursors may have gaps between an account's entries.
 
 Native credentials use `Authorization: Fuel <binding-id>:<secret>` over TLS. Browser credentials use namespace-specific host-only Secure HttpOnly SameSite=Strict cookies (current, previous, candidate). Cookie mutations require an exact allowed Origin; deploy browser API same-origin. Credentials never belong in URLs. Authenticated responses include `X-Fuel-Account`; `X-Fuel-Expected-Account` rejects a changed selected account before dispatching an action. Account IDs are public pseudonyms, not authentication.

@@ -34,8 +34,87 @@ class WaitingWalletRules < WalletRules
   end
 end
 
+class WakeWalletRules < WalletRules
+  getter attempts = [] of Tuple(String, Time::Instant)
+
+  def initialize(@retry_actor : String)
+  end
+
+  def apply(tx : Fuel::AccountTransaction, actor : String, action : String, payload : JSON::Any, now : Int64) : JSON::Any
+    @attempts << {actor, Time.instant}
+    raise "temporary failure" if actor == @retry_actor && @attempts.count { |attempt| attempt[0] == actor } == 1
+    super
+  end
+end
+
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "shared service runtime" do
+    it "cannot start queued effects after stop" do
+      store = Fuel::Store.new(url, "runtime_stopped_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      actor = store.bootstrap(Fuel::Credential.new(Fuel.id, Random::Secure.hex(32)), Fuel.id)
+      sessions = Fuel::Sessions.new(EffectRules.new)
+      room = sessions.create(actor, "solo", 1)
+      room.command(actor, room.epoch, "pending", 0_i64, Fuel.json({id: "pending"}))
+      runtime = Fuel::Runtime.new(store, sessions, Fuel::Handler.new(store, sessions, [] of String), WalletRules.new)
+      runtime.stop
+      begin
+        runtime.pump_effects.should eq(0)
+        room.pending_effects.should eq(1)
+      ensure
+        deadline = Time.instant + 3.seconds
+        until runtime.health["inflight"].as_i == 0 || Time.instant >= deadline
+          sleep 1.millisecond
+        end
+        store.close
+      end
+    end
+
+    it "continues queued effects on completion while preserving fairness and retry delay" do
+      store = Fuel::Store.new(url, "runtime_wake_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      credentials = Array.new(2) { Fuel::Credential.new(Fuel.id, Random::Secure.hex(32)) }
+      actors = credentials.map { |credential| store.bootstrap(credential, Fuel.id) }
+      sessions = Fuel::Sessions.new(EffectRules.new)
+      rooms = actors.map { |actor| sessions.create(actor, "solo", 1) }
+      24.times do |index|
+        rooms[0].command(actors[0], rooms[0].epoch, "queued_#{index}", rooms[0].snapshot(actors[0])["revision"].as_s.to_i64, Fuel.json({id: "queued_#{index}"}))
+      end
+      rooms[1].command(actors[1], rooms[1].epoch, "other", 0_i64, Fuel.json({id: "other"}))
+      rules = WakeWalletRules.new(actors[0])
+      runtime = Fuel::Runtime.new(store, sessions, Fuel::Handler.new(store, sessions, [] of String), rules, worker_limit: 1)
+      runtime.server.bind_tcp("127.0.0.1", 0)
+      completed = Channel(Exception?).new(1)
+      spawn do
+        runtime.listen
+        completed.send(nil)
+      rescue error
+        completed.send(error)
+      end
+      begin
+        # A discovery-only 250ms cadence takes over six seconds for this queue.
+        # This deadline checks scheduling, not a game latency guarantee.
+        deadline = Time.instant + 3.seconds
+        until rooms.all? { |room| room.pending_effects == 0 } || Time.instant >= deadline
+          sleep 1.millisecond
+        end
+        rooms.map(&.pending_effects).should eq([0, 0])
+        rules.attempts.first(2).map(&.[0]).should eq(actors)
+        retry_times = rules.attempts.select { |attempt| attempt[0] == actors[0] }.map(&.[1])
+        (retry_times[1] - retry_times[0]).should be >= 1.second
+        store.progress(credentials[0])["coins"].as_i64.should eq(820)
+        store.progress(credentials[1])["coins"].as_i64.should eq(130)
+        store.operations(credentials[0], after: "0").map(&.["operation_id"].as_s).should eq(
+          Array.new(24) { |index| "#{rooms[0].epoch}-queued_#{index}" })
+      ensure
+        runtime.stop
+        error = completed.receive
+        store.close
+        raise error if error
+      end
+      runtime.health["inflight"].as_i.should eq(0)
+    end
+
     it "cannot replace a drained process with an unsettled completion result" do
       store = Fuel::Store.new(url, "legacy_drain_#{Fuel.id}", "d" * 32, "p" * 32)
       sessions = Fuel::Sessions.new(LegacyCompletionRules.new)

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.8 — prompt FIFO settlement
+
+Completed workers schedule the next eligible FIFO heads through the existing bounded, fair runtime scheduler. Queued events and results no longer wait a discovery interval after every fast commit. Per-room ordering, worker limits and retry delays remain intact; a stopped runtime cannot schedule more effects. Wire-compatible with SDK0.3.7, with no database migration or new dependency.
+
 ## 0.3.7 — device handoff without reconnect contention
 
 Canonical room sockets now send `connection_replaced` before detaching a displaced connection. SDK0.3.6 yields automatic reconnection while retaining the room for explicit reclaim. Transient inputs on the displaced socket do not race the single writer's notification. Other authorization and IO failures still fail closed.

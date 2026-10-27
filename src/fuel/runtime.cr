@@ -107,7 +107,7 @@ module Fuel
         index = (first + offset) % rooms.size
         room = rooms[index]
         reserved = @mutex.synchronize do
-          if @workers < @worker_limit
+          if !@stopped && @workers < @worker_limit
             @workers += 1
             @effect_cursor = (index + 1) % rooms.size
             true
@@ -143,6 +143,8 @@ module Fuel
         STDERR.puts "Fuel room effect postponed"
       ensure
         @mutex.synchronize { @workers -= 1 }
+        # Continue accepted FIFO work without one discovery interval per head.
+        pump_effects if @mutex.synchronize { @running }
       end
     end
 

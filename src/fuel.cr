@@ -6,7 +6,7 @@ require "set"
 require "./fuel/*"
 
 module Fuel
-  VERSION = "0.3.7"
+  VERSION = "0.3.8"
 
   class Error < Exception
     getter code : String
