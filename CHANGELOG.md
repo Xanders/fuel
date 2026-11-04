@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.9 — trusted issuer login
+
+Distinct trusted server enrollment and five-minute one-time login grants, with
+durable attempt budgets, exact retained-proof reconciliation and ordinary Fuel
+bindings/revocation afterward. No public issuer routes or master binding; ordinary
+owner-confirmed transfer is unchanged. Additive migration 006; enrollment receipt
+tombstones survive deletion.
+
 ## 0.3.8 — prompt FIFO settlement
 
 Completed workers schedule the next eligible FIFO heads through the existing bounded, fair runtime scheduler. Queued events and results no longer wait a discovery interval after every fast commit. Per-room ordering, worker limits and retry delays remain intact; a stopped runtime cannot schedule more effects. Wire-compatible with SDK0.3.7, with no database migration or new dependency.

@@ -39,7 +39,7 @@ module Fuel
 
     def migrate
       @db.transaction do |tx|
-        ({{ read_file("#{__DIR__}/../../migrations/001_initial.sql") }} + {{ read_file("#{__DIR__}/../../migrations/002_accounts.sql") }} + {{ read_file("#{__DIR__}/../../migrations/003_device_lifecycle.sql") }} + {{ read_file("#{__DIR__}/../../migrations/004_moderation.sql") }} + {{ read_file("#{__DIR__}/../../migrations/005_analytics_lifecycle.sql") }}).split(';').each do |statement|
+        ({{ read_file("#{__DIR__}/../../migrations/001_initial.sql") }} + {{ read_file("#{__DIR__}/../../migrations/002_accounts.sql") }} + {{ read_file("#{__DIR__}/../../migrations/003_device_lifecycle.sql") }} + {{ read_file("#{__DIR__}/../../migrations/004_moderation.sql") }} + {{ read_file("#{__DIR__}/../../migrations/005_analytics_lifecycle.sql") }} + {{ read_file("#{__DIR__}/../../migrations/006_trusted_login.sql") }}).split(';').each do |statement|
           tx.connection.exec(statement) unless statement.strip.empty?
         end
       end

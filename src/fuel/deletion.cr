@@ -44,6 +44,7 @@ module Fuel
       # an unexpected replacement account after the deletion outcome expires.
       c.exec("INSERT INTO fuel_retired_bindings(ns,id) SELECT ns,id FROM fuel_bindings WHERE ns=$1 AND account=$2 ON CONFLICT DO NOTHING", @namespace, account)
       c.exec("DELETE FROM fuel_chat WHERE ns=$1 AND (actor=$2 OR recipient=$2)", @namespace, account)
+      c.exec("UPDATE fuel_enrollments SET account=NULL WHERE ns=$1 AND account=$2", @namespace, account)
       c.exec("DELETE FROM fuel_accounts WHERE ns=$1 AND id=$2", @namespace, account)
     end
   end

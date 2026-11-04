@@ -29,6 +29,9 @@ Implement `Fuel::Rules` for RAM gameplay and `Fuel::AccountRules` for permanent 
 
 ## Included services
 
+- Optional [trusted issuer enrollment/login](docs/TRUSTED_LOGIN.md), separate from
+  owner-confirmed transfer, with one-time grants and ordinary Fuel bindings afterward.
+
 - Permanent guest devices, independent device bindings, owner-confirmed six-character transfer, revocation and account deletion.
 - Pure persistent account hooks, sorted multi-account transactions, exact action receipts, terminal summaries and HTTP recovery after RAM session loss.
 - Bounded per-room FIFO effects, one head in flight, explicit saving backpressure and shared drain/health lifecycle.

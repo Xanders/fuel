@@ -1,5 +1,14 @@
 # Security
 
+Optional [trusted issuer login](docs/TRUSTED_LOGIN.md) deliberately grants a
+server-authorized identity to a new device without the ordinary transfer phrase
+flow. Its enrollment/issuance methods must never be exposed anonymously: the
+embedding service owns issuer authorization and subject consent. Codes use a
+separate HMAC domain, are one-use, expire after five minutes and atomically create
+ordinary revocable bindings. Retain the candidate proof before redemption; exact
+retries cannot revive revoked/deleted credentials. Ordinary owner-confirmed device
+transfer is unchanged.
+
 Report vulnerabilities privately through the maintainer's GitHub security advisory channel. Do not include real device secrets, transfer codes, database URLs or player data in public issues.
 
 Fuel's baseline validates authentication, current binding revocation, member access, epochs/revisions/input order, resource bounds and game-owned legal-action hooks. This is basic security/anti-cheat infrastructure, not a claim that arbitrary client results are trustworthy. Rules must enforce phase, turn, ownership, speed/range/economy and scoring constraints relevant to each game.

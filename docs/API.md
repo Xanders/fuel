@@ -1,5 +1,8 @@
 # Wire API v1
 
+Optional trusted issuer enrollment/login is a [server-only Store API](TRUSTED_LOGIN.md).
+It adds no anonymous canonical HTTP route or replacement for owner-confirmed transfer.
+
 Fuel 0.3 is an experimental API; pin the server and SDK to the same reviewed release. `wire_version: 1` identifies the envelope, not compatibility with every earlier development API. The default prefix is `/fuel/v1`; `Handler(prefix: ...)` and the SDK base URI can select another application prefix.
 
 Fuel0.3.8 is wire-compatible with SDK0.3.7.
