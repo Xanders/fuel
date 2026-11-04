@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.10 — identity embedding entrypoint
+
+`require "fuel/identity"` loads the same Store and supporting primitives without
+the canonical game HTTP Handler/Runtime. This avoids a Crystal 1.22.1 code-generation
+failure when embedding a separate HTTP service without constructing game handlers.
+Full `require "fuel"` remains unchanged; no wire, schema or SDK compatibility change.
+
 ## 0.3.9 — trusted issuer login
 
 Distinct trusted server enrollment and five-minute one-time login grants, with

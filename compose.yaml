@@ -23,7 +23,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: [sh, -c, "shards install && crystal spec"]
+    command: [sh, -c, "shards install && crystal spec && crystal run spec/identity_entrypoint.cr"]
 networks:
   default:
     ipam:

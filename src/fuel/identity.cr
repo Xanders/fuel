@@ -1,0 +1,15 @@
+# Store and supporting primitives for embedding identity in a custom HTTP service.
+# Keep the canonical game Handler/Runtime out of this optional entrypoint.
+require "./core"
+require "./store"
+require "./accounts"
+require "./config"
+require "./deletion"
+require "./moderation"
+require "./questmetry"
+require "./ranking"
+require "./session"
+require "./milestones"
+require "./social"
+require "./socket"
+require "./trusted_login"

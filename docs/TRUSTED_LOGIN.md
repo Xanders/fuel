@@ -1,5 +1,12 @@
 # Trusted issuer enrollment and login
 
+For a custom identity HTTP service use `require "fuel/identity"`; it loads the
+same Store and supporting primitives without the canonical game Handler/Runtime.
+`require "fuel"` remains the complete game entrypoint. The split avoids Crystal
+1.22.1 code-generation failure when canonical game handlers are loaded but not
+constructed while an unrelated HTTP server is embedded. The isolated HTTP smoke
+`crystal run spec/identity_entrypoint.cr` guards this integration boundary.
+
 This optional server-side API is for an application which deliberately lets one
 trusted issuer enroll an identity and grant a new device access. It is separate
 from ordinary owner-confirmed device transfer. The canonical HTTP Handler exposes
