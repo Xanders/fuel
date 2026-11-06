@@ -34,6 +34,8 @@ Worker completion schedules the next eligible heads through the same bounded, ro
 
 Defaults: 1,000 rooms; eight simultaneous memberships per account created through the registry; 2,000 waiting ticket entries and 2,000 retained matched outcomes; five-minute ticket/outcome/cancellation horizon and invite codes; six-hour room TTL; 256 long polls, one per binding; 128 sockets; 64 KiB HTTP body; 16 KiB assembled WebSocket message. Empty settled rooms are reclaimed promptly; unsaved results are retained. A socket uses a 4 KiB receive buffer and one serial writer with a three-second write deadline. Full snapshots coalesce naturally at the writer; reliable events require resync on gaps.
 
+Room TTL is an absolute age limit, independent of activity. `Sessions.new(rules, ttl: nil)` disables only that age limit for long-running games. Idle departure, empty settled room cleanup, pending-work retention and room admission bounds still apply. This does not persist RAM state or make a drained runtime safe to replace while an active room remains.
+
 Chat defaults: 2,000 RAM channels, 50 messages per channel, 24-hour TTL, 2,000 input bytes per message. Optional persisted history for any configured channel kind is trimmed per channel and by TTL cleanup. Mutes are limited to200/account; reports require retained-message access, allowlisted reasons,12/day/reporting account,100,000/namespace and seven-day cleanup. Configure application admission and total PostgreSQL storage capacity as well as these limits.
 
 Guest creation is capped before insertion (default one million permanent accounts per namespace, plus per-source/global issuance budgets). Existing guests are never evicted to create space. Database failures return unavailable; there is no empty file-store fallback.

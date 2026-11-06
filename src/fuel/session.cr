@@ -495,7 +495,7 @@ module Fuel
     @playing = {} of String => String
     @mutex = Mutex.new
 
-    def initialize(@rules : Rules, @max_rooms = 1000, @max_tickets = 2000, @ttl = 6.hours, @ticket_ttl = 5.minutes, @modes = {} of String => ModePolicy, @idle_timeout = 30.seconds)
+    def initialize(@rules : Rules, @max_rooms = 1000, @max_tickets = 2000, @ttl : Time::Span? = 6.hours, @ticket_ttl = 5.minutes, @modes = {} of String => ModePolicy, @idle_timeout = 30.seconds)
       Fuel.check(@idle_timeout > Time::Span.zero, "invalid_limit")
       @modes.each do |mode, policy|
         Fuel.key(mode)
@@ -672,7 +672,8 @@ module Fuel
       @mutex.synchronize do
         @cancelled.reject! { |_, created| Time.instant - created >= @ticket_ttl }
         @matched.reject! { |_, outcome| Time.instant - outcome.created_at >= @ticket_ttl }
-        expired = @rooms.select { |_, r| r.disposable? || Time.instant - r.created_at >= @ttl && !r.pending_result? }.keys
+        ttl = @ttl
+        expired = @rooms.select { |_, r| r.disposable? || !ttl.nil? && Time.instant - r.created_at >= ttl && !r.pending_result? }.keys
         expired.each { |id| @rooms.delete(id) }
         @tickets.keys.each do |key|
           next unless @tickets.has_key?(key)

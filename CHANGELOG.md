@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.8 maintenance — optional room age limit
+
+`Sessions.new(rules, ttl: nil)` allows active sessions without an absolute age limit, retaining idle cleanup, pending-work protection and bounded admission. The default six-hour absolute TTL is unchanged. Recurring server event integration is documented using existing bounded effects; lifetime `SessionEvents.once` semantics are unchanged. This Git revision keeps the 0.3.8 version, schema, dependencies and SDK0.3.7 compatibility; pin the reviewed maintenance commit explicitly.
+
 ## 0.3.8 maintenance — retired binding admission
 
 Guest bootstrap and device-pair preparation recheck retired binding IDs after insertion within the same transaction. If deletion committed while binding access waited, admission rejects the old proof and rolls back the new account or candidate binding. This maintenance Git revision keeps the 0.3.8 version, schema, dependencies and SDK0.3.7 compatibility; the original v0.3.8 tag is unchanged. Pin the reviewed maintenance commit explicitly. It does not include later development features or migrations.
