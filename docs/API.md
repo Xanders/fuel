@@ -5,7 +5,7 @@ It adds no anonymous canonical HTTP route or replacement for owner-confirmed tra
 
 Fuel 0.3 is an experimental API; pin the server and SDK to the same reviewed release. `wire_version: 1` identifies the envelope, not compatibility with every earlier development API. The default prefix is `/fuel/v1`; `Handler(prefix: ...)` and the SDK base URI can select another application prefix.
 
-Fuel0.3.8 is wire-compatible with SDK0.3.7.
+Fuel0.3.11 is wire-compatible with SDK0.3.7.
 
 Success is `{"wire_version":1,"data":...}` and error is `{"wire_version":1,"error":"code"}`. Send `X-Fuel-Version: 1`. Revisions, sequences, receipt cursors, scores and counts are decimal strings; Unix timestamps are integers. Global operation cursors may have gaps between an account's entries.
 
@@ -62,7 +62,7 @@ Native credentials use `Authorization: Fuel <binding-id>:<secret>` over TLS. Bro
 
 A late transient input after room completion cannot mutate the result. The socket sends a fresh authorised final snapshot so an input based on an older active snapshot does not cause a reconnect loop. Lost epochs and authorization failures still fail closed. Fuel 0.3.1 is compatible with SDK 0.3.0.
 
-Snapshots contain `session_id,mode,code,epoch,revision,state,server_time,last_input,ready,saving_backlog,effect_error,receipt_cursor,receipt_base,receipts`. The domain `state` is always a private viewer projection. Socket envelopes also carry actual `account_id` and physical `generation`. Inputs are `{epoch,sequence:"1",action:{...}}`; never replay them after reconnect. About ten full snapshots/second are independent of the game's fixed-step tick.
+Snapshots contain `session_id,mode,code,epoch,revision,state,server_time,last_input,ready,saving_backlog,effect_error,receipt_cursor,receipt_base,receipts`. The domain `state` is always a private viewer projection. Socket envelopes also carry actual `account_id` and physical `generation`. Inputs are `{epoch,sequence:"1",action:{...}}`; never replay them after reconnect. The default 100 ms full-snapshot interval is independent of the game's fixed-step tick. Configure a positive `Handler(..., socket_interval: 500.milliseconds)` to change it; see [transport delivery](TRANSPORT.md#bounded-delivery) for latency and heartbeat limits. This does not change HTTP command handling or reliable-event semantics.
 
 Acknowledging an analytics-only effect leaves a viewer's revision unchanged when its projection and visible metadata did not change. Gameplay receipts advance their recipients' revisions, and clearing room-wide saving backpressure advances all members' revisions. Consumers must not infer another player's private action from an otherwise unchanged settlement acknowledgement.
 

@@ -2,6 +2,60 @@ require "./session_spec"
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "canonical socket admission" do
+    it "uses the handler's snapshot interval and projects fresh state on each send" do
+      store = Fuel::Store.new(url, "interval_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      credential = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      actor = store.bootstrap(credential, "test")
+      sessions = Fuel::Sessions.new(CounterRules.new)
+      room = sessions.create(actor, "solo", 1)
+      handler = Fuel::Handler.new(store, sessions, [] of String, socket_interval: 500.milliseconds)
+      server = HTTP::Server.new(handler)
+      address = server.bind_tcp("127.0.0.1", 0)
+      spawn { server.listen }
+      headers = HTTP::Headers{"Authorization" => "Fuel #{credential.id}:#{credential.secret}"}
+      socket = HTTP::WebSocket.new(address.address, "/fuel/v1/stream?session_id=#{room.id}", port: address.port, headers: headers)
+      frames = Channel(Tuple(Time::Instant, JSON::Any)).new(8)
+      socket.on_message { |raw| frames.send({Time.instant, JSON.parse(raw)}) }
+      spawn { socket.run }
+      next_frame = -> {
+        select
+        when frame = frames.receive
+          frame
+        when timeout(3.seconds)
+          raise "Timed out waiting for interval snapshot"
+        end
+      }
+      begin
+        first_at, first = next_frame.call
+        first["data"]["state"]["value"].as_i.should eq(0)
+        room.command(actor, room.epoch, "increment", first["data"]["revision"].as_s.to_i64, Fuel.json({amount: 1}))
+        second_at, second = next_frame.call
+        (second_at - first_at).should be >= 450.milliseconds
+        second["data"]["state"]["value"].as_i.should eq(1)
+        second["data"]["revision"].as_s.to_i64.should be > first["data"]["revision"].as_s.to_i64
+        second["data"]["session_id"].as_s.should eq(room.id)
+      ensure
+        socket.close rescue nil
+        handler.close
+        server.close
+        store.close
+      end
+    end
+
+    it "rejects nonpositive handler snapshot intervals" do
+      store = Fuel::Store.new(url, "interval_invalid_#{Fuel.id}", "d" * 32, "p" * 32)
+      begin
+        [Time::Span.zero, -1.milliseconds].each do |interval|
+          expect_raises(Fuel::Error, "invalid_limit") do
+            Fuel::Handler.new(store, Fuel::Sessions.new(CounterRules.new), [] of String, socket_interval: interval)
+          end
+        end
+      ensure
+        store.close
+      end
+    end
+
     it "tells a replaced room connection to yield without losing membership" do
       store = Fuel::Store.new(url, "replaced_#{Fuel.id}", "d" * 32, "p" * 32)
       store.migrate

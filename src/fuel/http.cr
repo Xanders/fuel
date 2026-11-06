@@ -24,9 +24,9 @@ module Fuel
                    @guild_access : Proc(String, String, Bool) = ->(actor : String, guild : String) { false },
                    @deletion_hook : Proc(DB::Connection, String, Nil)? = nil,
                    @account_rules : AccountRules? = nil, @prefix : String = "/fuel/v1",
-                   @leaderboard_reader : LeaderboardReader? = nil)
+                   @leaderboard_reader : LeaderboardReader? = nil, *, socket_interval : Time::Span = 100.milliseconds)
       Fuel.check(@prefix.matches?(/\A(?:\/[a-zA-Z0-9_-]+)+\z/), "invalid_prefix")
-      @sockets = SocketServer.new(@origins)
+      @sockets = SocketServer.new(@origins, interval: socket_interval)
       names = ->(actor : String, state : JSON::Any) { @account_rules.try(&.display_name(actor, state)) || actor }
       @chat = Chat.new(censor: censor, store: @store, persist: persisted_chat, display_name: names) do |actor, kind, target|
         kind == "global" || (kind == "session" && @sessions.get(target).member?(actor)) || (kind == "guild" && @guild_access.call(actor, target))
