@@ -5,7 +5,7 @@ It adds no anonymous canonical HTTP route or replacement for owner-confirmed tra
 
 Fuel 0.3 is an experimental API; pin the server and SDK to the same reviewed release. `wire_version: 1` identifies the envelope, not compatibility with every earlier development API. The default prefix is `/fuel/v1`; `Handler(prefix: ...)` and the SDK base URI can select another application prefix.
 
-Fuel0.3.11 is wire-compatible with SDK0.3.7.
+Fuel0.3.12 is wire-compatible with SDK0.3.7.
 
 Success is `{"wire_version":1,"data":...}` and error is `{"wire_version":1,"error":"code"}`. Send `X-Fuel-Version: 1`. Revisions, sequences, receipt cursors, scores and counts are decimal strings; Unix timestamps are integers. Global operation cursors may have gaps between an account's entries.
 

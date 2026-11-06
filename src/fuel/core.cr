@@ -5,7 +5,7 @@ require "uri"
 require "set"
 
 module Fuel
-  VERSION = "0.3.11"
+  VERSION = "0.3.12"
 
   class Error < Exception
     getter code : String

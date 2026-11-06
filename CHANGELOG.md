@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.12 — retirement checks after concurrent deletion
+
+Guest bootstrap and device-pair preparation recheck retired binding IDs after insertion, inside the same transaction. Deletion may commit while binding access waits; admission now rejects that retired proof and rolls back any new account or candidate binding. The existing trusted-login admission already performs this recheck. No migration, SDK, wire or dependency change; wire-compatible with SDK0.3.7.
+
 ## 0.3.11 — configurable canonical snapshot interval
 
 `Handler.new(..., socket_interval: 500.milliseconds)` forwards a positive `Time::Span` to the shared WebSocket server. The default remains 100 ms; zero and negative intervals raise `invalid_limit`. Games can reduce periodic full-snapshot traffic without replacing private transport internals. Game ticks, HTTP commands, reliable events and SDK wire formats are unchanged. No new migration or dependency; wire-compatible with SDK0.3.7. This setting is a traffic/latency trade-off, not a guarantee against downstream buffering.
