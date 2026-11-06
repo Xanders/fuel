@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.8 maintenance — retired binding admission
+
+Guest bootstrap and device-pair preparation recheck retired binding IDs after insertion within the same transaction. If deletion committed while binding access waited, admission rejects the old proof and rolls back the new account or candidate binding. This maintenance Git revision keeps the 0.3.8 version, schema, dependencies and SDK0.3.7 compatibility; the original v0.3.8 tag is unchanged. Pin the reviewed maintenance commit explicitly. It does not include later development features or migrations.
+
 ## 0.3.8 — prompt FIFO settlement
 
 Completed workers schedule the next eligible FIFO heads through the existing bounded, fair runtime scheduler. Queued events and results no longer wait a discovery interval after every fast commit. Per-room ordering, worker limits and retry delays remain intact; a stopped runtime cannot schedule more effects. Wire-compatible with SDK0.3.7, with no database migration or new dependency.

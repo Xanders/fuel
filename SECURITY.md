@@ -16,6 +16,8 @@ Cookie slots are namespaced by the configured store namespace, not shared global
 
 Deleting an account requires confirmation, expected owner and a saved random deletion proof. Its keyed status receipt survives for 30 days and reveals only the deletion outcome/public binding IDs. It is not a general account recovery secret. Old deleted binding IDs cannot bootstrap again. Deleting the current account does not erase another retained account's proof. Revoking the last active binding requires separate confirmation.
 
+Binding admission rechecks retired IDs after insertion within the same transaction. A deletion committed while binding access waited rejects the old proof and rolls back the new account or candidate binding; it cannot silently recreate a guest or prepare a transfer under a retired ID.
+
 Public account actions are allowlisted independently from server effects. Sorted participant locks protect transfers; binding authority is revalidated after those locks and retained through short private delivery boundaries. Domain hooks receive copied JSON and bounded descriptors, not credentials or database/network handles. Game code must still validate legal quantities, generations, ranges and reward eligibility.
 
 The application must provide HTTPS/WSS, database access controls, secret handling, proxy-level connection/header limits, game-specific deletion hooks and a plain-text chat renderer. The source-address limiter uses the socket IP; behind a proxy add trusted-source admission at that proxy. Fuel does not trust arbitrary forwarded headers.

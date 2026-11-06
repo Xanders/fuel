@@ -59,6 +59,8 @@ module Fuel
         account = Fuel.id
         c.exec("INSERT INTO fuel_accounts(ns,id) VALUES($1,$2)", @namespace, account)
         c.exec("INSERT INTO fuel_bindings(ns,id,account,verifier) VALUES($1,$2,$3,$4)", @namespace, credential.id, account, verifier(credential))
+        # Binding access may wait for deletion; observe its committed tombstone.
+        Fuel.check(c.query_one?("SELECT id FROM fuel_retired_bindings WHERE ns=$1 AND id=$2", @namespace, credential.id, as: String).nil?, "unauthorized")
         account
       end
     end
@@ -116,6 +118,7 @@ module Fuel
         id, prior, phrase = row
         Fuel.check(prior.nil? || prior == candidate.id, "invalid_code")
         c.exec("INSERT INTO fuel_bindings(ns,id,verifier,expires_at) VALUES($1,$2,$3,now()+interval '5 minutes') ON CONFLICT DO NOTHING", @namespace, candidate.id, verifier(candidate))
+        Fuel.check(c.query_one?("SELECT id FROM fuel_retired_bindings WHERE ns=$1 AND id=$2", @namespace, candidate.id, as: String).nil?, "invalid_code")
         binding = c.query_one("SELECT account,verifier,revoked FROM fuel_bindings WHERE ns=$1 AND id=$2 FOR UPDATE", @namespace, candidate.id, as: {String?, String, Bool})
         Fuel.check(binding[0].nil? && !binding[2] && verify_proof(c, candidate, binding[1]), "invalid_code")
         phrase ||= Random::Secure.hex(3)
