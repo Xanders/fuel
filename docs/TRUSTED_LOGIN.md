@@ -56,3 +56,50 @@ tombstones enrollment receipts. Owner-confirmed six-character transfers retain
 their phrase confirmation and existing routes. No native/browser SDK flow is
 provided for this optional server-only capability; consumers own thin retained-proof
 activation UX, not a parallel verifier/store.
+
+## Optional authorization before activation
+
+Configure every Store used for trusted redemption with `login_authorizer:` when
+the application requires an additional factor. `Fuel::LoginAuthorizer` is
+`Proc(DB::Connection, String, JSON::Any?, Nil)`: connection, server-only account,
+and optional proof. Call `redeem_login(code, candidate, source, step_up: proof)`;
+the default proof is nil. A supplied proof must be a JSON object of at most2KiB
+or redemption raises `invalid_proof` before invoking the policy. Proofs are copied
+for the callback and are neither persisted nor logged by Fuel.
+
+The callback runs with the account and grant locked, before the first binding
+INSERT. Return nil only when permitted; raise on missing, invalid or unavailable
+verification. A policy can raise neutral `Fuel::Error` codes such as
+`factor_required` or `invalid_factor`; never include an account ID, seed, code or
+proof in errors. The application may ask for the factor while privately retaining
+the original code and candidate. No account is returned and no binding becomes
+active on a failed check. There is no public pending-account lookup.
+
+Use only the supplied connection for transactional security state, with lock order
+account then application security row. Factor replay counters or one-use recovery
+records commit atomically with the new ordinary Fuel binding and consumed grant;
+errors, occupied/retired candidates or wall-clock grant expiry roll them back.
+The hook must be fast and database-local: no network, nested Store calls/new pooled
+connections, irreversible effects, or catching a denial and returning success.
+Configure the same policy on every redeeming Store/process, including after reopen.
+An unconfigured Store deliberately retains the original trusted-issuer behavior.
+
+With a configured authorizer, attempts against a currently live unconsumed grant
+also cost at most10/account/minute. That budget commits **before** the activation
+transaction, alongside the existing independently committed source/global limits;
+policy failures cannot refund it. Do not implement a second counter inside the
+callback transaction and assume it survives rollback. Consumed/expired/cancelled
+grants do not charge this additional account budget at the initial lookup.
+
+An exact consumed-code retry verifies the same active candidate and returns the
+account without running the authorizer or consuming a factor again, even after the
+grant's original expiry. Forged/revoked/deleted proofs and other candidates still
+fail. This is recovery of an already authorized binding, not a new activation.
+
+Fuel does not implement TOTP, seed encryption, factor enrollment/recovery UX or
+sensitive-operation step-up. Those are application policy/state using this atomic
+boundary. This hook protects only trusted `redeem_login`: authentication of existing
+bindings, bootstrap, ordinary owner-confirmed transfer and other application login
+methods are unchanged. Do not expose an alternate attachment route that bypasses
+the application's required factor. Browser Origin/cookie and retained-proof
+requirements above still apply; never store transient factors in a client journal.

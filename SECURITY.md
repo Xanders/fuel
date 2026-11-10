@@ -9,6 +9,15 @@ ordinary revocable bindings. Retain the candidate proof before redemption; exact
 retries cannot revive revoked/deleted credentials. Ordinary owner-confirmed device
 transfer is unchanged.
 
+Applications requiring extra authorization for trusted login must configure the
+same `login_authorizer` on every redeeming Store. It executes inside the locked
+account/grant transaction before activation; denied checks create no binding.
+Use its connection for replay counters so activation and factor consumption are
+atomic. The independent per-account budget survives rollback. This hook does not
+add a factor to other binding/transfer paths or existing-session authentication;
+the embedding application must prevent alternate-route bypass. See the trusted
+login contract for proof bounds, callback restrictions and exact-retry behavior.
+
 Report vulnerabilities privately through the maintainer's GitHub security advisory channel. Do not include real device secrets, transfer codes, database URLs or player data in public issues.
 
 Fuel's baseline validates authentication, current binding revocation, member access, epochs/revisions/input order, resource bounds and game-owned legal-action hooks. This is basic security/anti-cheat infrastructure, not a claim that arbitrary client results are trustworthy. Rules must enforce phase, turn, ownership, speed/range/economy and scoring constraints relevant to each game.

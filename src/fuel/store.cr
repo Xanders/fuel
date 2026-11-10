@@ -3,6 +3,9 @@ require "openssl/hmac"
 require "crypto/subtle"
 
 module Fuel
+  # Trusted server policy, inside the account/grant transaction before binding.
+  alias LoginAuthorizer = Proc(DB::Connection, String, JSON::Any?, Nil)
+
   struct Credential
     getter id : String
     getter secret : String
@@ -26,7 +29,7 @@ module Fuel
       @analytics_delivery.synchronize { yield }
     end
 
-    def initialize(url : String, @namespace : String, @device_key : String, @pair_key : String, @previous_device_keys = [] of String, @max_accounts = 1000000)
+    def initialize(url : String, @namespace : String, @device_key : String, @pair_key : String, @previous_device_keys = [] of String, @max_accounts = 1000000, @login_authorizer : LoginAuthorizer? = nil)
       Fuel.check(url.starts_with?("postgres://") || url.starts_with?("postgresql://"), "postgres_required")
       Fuel.key(namespace)
       Fuel.check(device_key.bytesize >= 32 && pair_key.bytesize >= 32 && device_key != pair_key, "invalid_server_keys")

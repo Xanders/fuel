@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.13 — trusted login authorization before activation
+
+An optional Store `login_authorizer` validates server-owned step-up policy before a new trusted-login binding is inserted. Its database writes, grant consumption and binding activation commit together. Exact successful retries revalidate the active proof without consuming a factor again. Configured policy adds a durable per-account admission budget outside activation rollback. No new authentication store, factor algorithm, migration, dependency, HTTP/SDK flow or change to ordinary device transfer is included.
+
 ## 0.3.12 — retirement checks after concurrent deletion
 
 Guest bootstrap and device-pair preparation recheck retired binding IDs after insertion, inside the same transaction. Deletion may commit while binding access waits; admission now rejects that retired proof and rolls back any new account or candidate binding. The existing trusted-login admission already performs this recheck. No migration, SDK, wire or dependency change; wire-compatible with SDK0.3.7.

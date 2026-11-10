@@ -72,6 +72,11 @@ A durable operation contains `operation_id,cursor,source,session_id,epoch,action
 
 ## Recovery and authority
 
+Custom trusted identity services can configure a transactional `login_authorizer`
+and pass optional `step_up` proof to `Store#redeem_login` before new-device
+activation; [the server-only contract](TRUSTED_LOGIN.md) defines authority, limits
+and exact retries. The canonical HTTP Handler and SDK expose no new endpoint.
+
 - `unauthorized/selection_changed`: stop private activity and reconcile the saved identity; never bootstrap a replacement guest automatically.
 - `connection_replaced`: another socket took this player's place in the same room. The old socket receives this error envelope before closing; stop automatic reconnection and wait for an explicit reconnect. Membership and RAM state remain. Use a matching SDK; older clients cannot yield this way.
 - `session_lost/session_ended`: abandon old RAM commands. Offer a deliberate new session; permanent progress and committed receipts remain.

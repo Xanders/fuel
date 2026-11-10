@@ -12,6 +12,11 @@
 | Runtime | Shared HTTP/tick/cleanup lifecycle, FIFO effect workers, analytics scheduling and drain/health |
 | Dart / Flutter / Flame | Networking and recovery / platform lifecycle / presentation |
 
+Trusted issuer redemption optionally uses a Store-configured `LoginAuthorizer`
+inside the account/grant transaction before a new binding. The application owns
+factor policy and security state; Fuel owns activation, grant/retry authority and
+independent durable attempt admission. See [trusted login](TRUSTED_LOGIN.md).
+
 ## Storage contract
 
 Independent applications may compose prebound Runtime listeners in one process. Each retains its own namespace, sessions, origins and identity owner; the process coordinates signals and observes every listener's bounded shutdown completion before closing stores. This is local composition, not multi-instance routing. A trusted ranking reader may expose an explicitly designed public board across local namespaces while retaining source-qualified score ownership. See the [API lifecycle and ranking contracts](API.md).

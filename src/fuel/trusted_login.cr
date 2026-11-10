@@ -37,16 +37,21 @@ module Fuel
       end
     end
 
-    def redeem_login(code : String, candidate : Credential, source : String) : String
+    def redeem_login(code : String, candidate : Credential, source : String, step_up : JSON::Any? = nil) : String
       # Admission commits independently: invalid proofs cannot roll back budgets.
       limit("login:global", 200, 60)
       limit("login:source:#{source}", 10, 60)
       normalized = code.gsub('-', "").upcase
       Fuel.check(normalized.matches?(/\A[0-9A-F]{16}\z/), "invalid_code")
+      proof = step_up.try(&.to_json)
+      Fuel.check(step_up.nil? || step_up.raw.is_a?(Hash) && proof.not_nil!.bytesize <= 2048, "invalid_proof")
       hash = login_digest("verifier", normalized)
+      lookup = @db.query_one?("SELECT account,candidate IS NULL AND NOT cancelled AND expires_at>clock_timestamp() FROM fuel_login_grants WHERE ns=$1 AND code_hash=$2", @namespace, hash, as: {String, Bool})
+      raise Error.new("invalid_code") unless lookup
+      account = lookup[0]
+      # Commit outside activation: policy denial must not refund account attempts.
+      limit("login:account:#{account}", 10, 60) if @login_authorizer && lookup[1]
       transaction do |c|
-        account = c.query_one?("SELECT account FROM fuel_login_grants WHERE ns=$1 AND code_hash=$2", @namespace, hash, as: String)
-        raise Error.new("invalid_code") unless account
         # Same order as ordinary binding operations and issuer reissuance.
         Fuel.check(!c.query_one?("SELECT id FROM fuel_accounts WHERE ns=$1 AND id=$2 FOR UPDATE", @namespace, account, as: String).nil?, "invalid_code")
         grant = c.query_one?("SELECT candidate,cancelled,expires_at>now() FROM fuel_login_grants WHERE ns=$1 AND code_hash=$2 FOR UPDATE", @namespace, hash, as: {String?, Bool, Bool})
@@ -63,6 +68,7 @@ module Fuel
         end
         Fuel.check(grant[2], "invalid_code")
         Fuel.check(c.query_one?("SELECT id FROM fuel_retired_bindings WHERE ns=$1 AND id=$2", @namespace, candidate.id, as: String).nil?, "invalid_code")
+        @login_authorizer.try(&.call(c, account, proof.try { |text| JSON.parse(text) }))
         inserted = c.exec("INSERT INTO fuel_bindings(ns,id,account,verifier) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING", @namespace, candidate.id, account, verifier(candidate))
         Fuel.check(inserted.rows_affected == 1, "invalid_code")
         # An insert may wait for deletion of the old binding. Recheck after that
