@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.8 maintenance — invite age and rule presence
+
+`Sessions.new(rules, invite_ttl: nil)` retains the original invite for a registered, joinable room; the default remains five minutes, independently of room age and ticket/transfer expiry. Optional presence-aware action/tick hooks receive immutable room-owned membership and current socket generations. Existing hooks delegate unchanged, waiting lobbies do not auto-start, and the game owns disconnect policy. No wire, schema, dependency or SDK change; pin the reviewed maintenance commit explicitly.
+
 ## 0.3.8 maintenance — optional room age limit
 
 `Sessions.new(rules, ttl: nil)` allows active sessions without an absolute age limit, retaining idle cleanup, pending-work protection and bounded admission. The default six-hour absolute TTL is unchanged. Recurring server event integration is documented using existing bounded effects; lifetime `SessionEvents.once` semantics are unchanged. This Git revision keeps the 0.3.8 version, schema, dependencies and SDK0.3.7 compatibility; pin the reviewed maintenance commit explicitly.

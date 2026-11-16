@@ -4,6 +4,29 @@ module Fuel
   record ModePolicy, capacity : Int32, public : Bool = false, late_join : Bool = true,
     shared : Bool = false, exclusive : Bool = true, start_immediately : Bool = false
 
+  class SessionPresence
+    def initialize(members : Array(String), connections : Hash(String, String))
+      @members = members.dup
+      @connections = connections.dup
+    end
+
+    def members : Array(String)
+      @members.dup
+    end
+
+    def connected : Array(String)
+      @members.select { |actor| connected?(actor) }
+    end
+
+    def connected?(actor : String) : Bool
+      @connections.has_key?(actor)
+    end
+
+    def generation(actor : String) : String?
+      @connections[actor]?
+    end
+  end
+
   abstract class Rules
     abstract def initial : JSON::Any
     abstract def apply(state : JSON::Any, actor : String, action : JSON::Any) : JSON::Any
@@ -33,6 +56,10 @@ module Fuel
       apply(state, actor, action)
     end
 
+    def apply(state : JSON::Any, actor : String, action : JSON::Any, presence : SessionPresence, events : SessionEvents) : JSON::Any
+      apply(state, actor, action, events)
+    end
+
     def authorize(state : JSON::Any, actor : String, progress : JSON::Any) : Nil
     end
 
@@ -46,6 +73,10 @@ module Fuel
 
     def tick(state : JSON::Any, dt : Time::Span, events : SessionEvents) : JSON::Any
       tick(state, dt)
+    end
+
+    def tick(state : JSON::Any, dt : Time::Span, presence : SessionPresence, events : SessionEvents) : JSON::Any
+      tick(state, dt, events)
     end
 
     def result(state : JSON::Any, actor : String) : GameResult?
@@ -263,7 +294,7 @@ module Fuel
         Fuel.check(!@results.has_key?(actor), "session_ended")
         Fuel.check(!@rules.finished?(JSON.parse(@state.to_json)), "session_ended")
         events = SessionEvents.new(Time.utc.to_unix)
-        publish_candidate(@rules.apply(JSON.parse(@state.to_json), actor, action, events), facts: events.facts)
+        publish_candidate(@rules.apply(JSON.parse(@state.to_json), actor, action, SessionPresence.new(@members, @connections), events), facts: events.facts)
         @started = true
         @revision += 1
         changed(actor)
@@ -292,7 +323,7 @@ module Fuel
         Fuel.check(!@results.has_key?(actor), "session_ended")
         Fuel.check(!@rules.finished?(JSON.parse(@state.to_json)), "session_ended")
         events = SessionEvents.new(Time.utc.to_unix)
-        publish_candidate(@rules.apply(JSON.parse(@state.to_json), actor, action, events), facts: events.facts)
+        publish_candidate(@rules.apply(JSON.parse(@state.to_json), actor, action, SessionPresence.new(@members, @connections), events), facts: events.facts)
         @started = true
         @sequences[actor] = sequence
         @revision += 1
@@ -306,7 +337,7 @@ module Fuel
       @mutex.synchronize do
         return if @ended || !@started || @backlog
         events = SessionEvents.new(Time.utc.to_unix)
-        publish_candidate(@rules.tick(JSON.parse(@state.to_json), dt, events), facts: events.facts)
+        publish_candidate(@rules.tick(JSON.parse(@state.to_json), dt, SessionPresence.new(@members, @connections), events), facts: events.facts)
         @revision += 1
         changed
         freeze_results
@@ -495,7 +526,7 @@ module Fuel
     @playing = {} of String => String
     @mutex = Mutex.new
 
-    def initialize(@rules : Rules, @max_rooms = 1000, @max_tickets = 2000, @ttl : Time::Span? = 6.hours, @ticket_ttl = 5.minutes, @modes = {} of String => ModePolicy, @idle_timeout = 30.seconds)
+    def initialize(@rules : Rules, @max_rooms = 1000, @max_tickets = 2000, @ttl : Time::Span? = 6.hours, @ticket_ttl = 5.minutes, @modes = {} of String => ModePolicy, @idle_timeout = 30.seconds, @invite_ttl : Time::Span? = 5.minutes)
       Fuel.check(@idle_timeout > Time::Span.zero, "invalid_limit")
       @modes.each do |mode, policy|
         Fuel.key(mode)
@@ -521,7 +552,8 @@ module Fuel
     def join_code(actor : String, value : String, progress : JSON::Any = JSON.parse("{}"), preferences = {} of String => Int64) : Room
       code = Invite.normalize(value)
       @mutex.synchronize do
-        room = @rooms.values.find { |r| r.code == code && Time.instant - r.created_at < 5.minutes }
+        ttl = @invite_ttl
+        room = @rooms.values.find { |r| r.code == code && (ttl.nil? || Time.instant - r.created_at < ttl) }
         raise Error.new("invalid_code") unless room
         join_unlocked(actor, room, progress, preferences)
       end

@@ -36,6 +36,8 @@ Defaults: 1,000 rooms; eight simultaneous memberships per account created throug
 
 Room TTL is an absolute age limit, independent of activity. `Sessions.new(rules, ttl: nil)` disables only that age limit for long-running games. Idle departure, empty settled room cleanup, pending-work retention and room admission bounds still apply. This does not persist RAM state or make a drained runtime safe to replace while an active room remains.
 
+`invite_ttl` independently controls invite age from room creation (default five minutes). `invite_ttl: nil` keeps the original code usable while the room remains registered and joinable. Both age settings apply to the whole registry, not individual modes; ticket/account-transfer expirations are unchanged. Longer-lived invite codes remain shareable admission capabilities: choose this explicitly and retain request rate limits.
+
 Chat defaults: 2,000 RAM channels, 50 messages per channel, 24-hour TTL, 2,000 input bytes per message. Optional persisted history for any configured channel kind is trimmed per channel and by TTL cleanup. Mutes are limited to200/account; reports require retained-message access, allowlisted reasons,12/day/reporting account,100,000/namespace and seven-day cleanup. Configure application admission and total PostgreSQL storage capacity as well as these limits.
 
 Guest creation is capped before insertion (default one million permanent accounts per namespace, plus per-source/global issuance budgets). Existing guests are never evicted to create space. Database failures return unavailable; there is no empty file-store fallback.
@@ -47,6 +49,10 @@ Public join rechecks listing and room capacity. Code/link join uses the same mem
 A matched ticket wins over subsequent cancellation and returns the same room during the retained horizon. Waiting cancellation or account deletion removes the whole waiting party. An already-full party starts immediately; multiple smaller parties are packed in FIFO order without splitting them. One account cannot queue twice across modes. After a room ends or the player leaves, a new ticket generation can start while the old outcome remains retryable. Leave/disconnect/reconnect remain distinct; merely losing a socket does not delete a membership.
 
 Ticks begin after the first accepted action/input or after all capacity slots are ready. A waiting lobby is not started by a no-op global scheduler tick.
+
+Rules may override `apply(state, actor, action, presence, events)` and `tick(state, dt, presence, events)`. The default overloads delegate to the earlier hooks. `SessionPresence` is a defensive, room-owned snapshot captured under the gameplay lock: `members`, `connected`, `connected?(actor)` and opaque `generation(actor)`; disconnected members have no generation. Replacing a socket changes its generation, and a stale socket's close cannot disconnect its replacement. Client claims never populate this context. It reflects Fuel transport bindings, not proof of reachability or a heartbeat history; rapid disconnect/reconnect may coalesce between ticks. No timestamps or network/DB handles are exposed. HTTP-only members have no connected socket.
+
+The game maps account IDs to human seats and owns grace timers, pause/voting/resume/abort rules using normal actions/ticks. Presence does not start waiting lobbies, emit transport callbacks, persist sessions or automatically resume gameplay. Keep these hooks pure and nonblocking; use existing effects for persistent work.
 
 ## Fixed decisions and trade-offs
 

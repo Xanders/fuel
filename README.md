@@ -33,6 +33,7 @@ Implement `Fuel::Rules` for RAM gameplay and `Fuel::AccountRules` for permanent 
 - Pure persistent account hooks, sorted multi-account transactions, exact action receipts, terminal summaries and HTTP recovery after RAM session loss.
 - Bounded per-room FIFO effects, one head in flight, explicit saving backpressure and shared drain/health lifecycle.
 - Private invite codes and HTTPS links, public rooms, FIFO automatch, trusted co-op party matching.
+- Optional registry-wide room/invite age limits and authoritative presence snapshots for pure game rules; see [lifecycle contracts](docs/API.md#recovery-and-authority).
 - Serial session commands, per-viewer revisions, epoch fencing, exact-ID receipts, realtime input sequences, bounded fixed-step catch-up.
 - JSON HTTP, long polling and bounded WebSocket transport.
 - Best-score leaderboards and outcome ratings; games own display names and scoring rules.
