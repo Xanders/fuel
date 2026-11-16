@@ -54,6 +54,8 @@ Rules may override `apply(state, actor, action, presence, events)` and `tick(sta
 
 The game maps account IDs to human seats and owns grace timers, pause/voting/resume/abort rules using normal actions/ticks. Presence does not start waiting lobbies, emit transport callbacks, persist sessions or automatically resume gameplay. Keep these hooks pure and nonblocking; use existing effects for persistent work.
 
+For an active party that deliberately waits beyond idle_timeout, the game may override `Rules.retain_idle_member?(state, actor, presence)` (default false). Room calls this pure predicate on cloned state under its lock only for an expired offline member with another connected peer. The game checks phase, wait policy and human seats; true defers that idle departure without resetting activity or altering state. The next cleanup reevaluates it. With no connected peers, ordinary idle cleanup and pending-work protection apply; connected-member expiry, direct leave, account deletion, absolute room age and capacity limits remain independent. HTTP activity alone does not enable retention. See [API](API.md#recovery-and-authority).
+
 ## Fixed decisions and trade-offs
 
 Names belong to the game. Optional NameDictionary consumes one version1 shape: `{"version":1,"fallback":"en","separator":" ","locales":{"en":[["Quiet","Bright"],["Fox","Star"]]}}`. Ordered groups are joined after deterministic seed-based choice; locale falls back explicitly. The game controls its words, seed, uniqueness policy and scoreboard presentation. Fuel never invents a game-specific naming policy.

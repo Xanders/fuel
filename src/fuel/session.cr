@@ -63,6 +63,10 @@ module Fuel
     def authorize(state : JSON::Any, actor : String, progress : JSON::Any) : Nil
     end
 
+    def retain_idle_member?(state : JSON::Any, actor : String, presence : SessionPresence) : Bool
+      false
+    end
+
     def finished?(state : JSON::Any) : Bool
       false
     end
@@ -235,6 +239,8 @@ module Fuel
       @mutex.synchronize do
         @activity.keys.each do |actor|
           next if Time.instant - @activity[actor] < timeout
+          next if !@connections.has_key?(actor) && !@connections.empty? &&
+                  @rules.retain_idle_member?(JSON.parse(@state.to_json), actor, SessionPresence.new(@members, @connections))
           begin
             leave_unlocked(actor)
           rescue error : Error

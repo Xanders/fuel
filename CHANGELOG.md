@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.8 maintenance — game-owned idle membership retention
+
+Pure `Rules.retain_idle_member?(state, actor, presence)` can defer an expired offline member's departure while another peer is connected and the game explicitly permits waiting. Default false preserves existing cleanup. Fully offline rooms, stale connected members, direct departures, pending-work protection and absolute room age retain their existing rules. No activity reset, wire/schema/dependency or SDK change; pin the reviewed maintenance commit.
+
 ## 0.3.8 maintenance — invite age and rule presence
 
 `Sessions.new(rules, invite_ttl: nil)` retains the original invite for a registered, joinable room; the default remains five minutes, independently of room age and ticket/transfer expiry. Optional presence-aware action/tick hooks receive immutable room-owned membership and current socket generations. Existing hooks delegate unchanged, waiting lobbies do not auto-start, and the game owns disconnect policy. No wire, schema, dependency or SDK change; pin the reviewed maintenance commit explicitly.
