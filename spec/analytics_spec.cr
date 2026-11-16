@@ -29,7 +29,7 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
       bodies.size.should eq(2)
     end
 
-    it "stores only configured private or guild history and reads it after restart" do
+    it "reads configured private history after restart and rejects unknown channel kinds" do
       chat = Fuel::Chat.new(store: store, persist: ["private"], history_limit: 2) { |_, kind, _| kind == "global" }
       chat.post(account, "private", "bob", "hello")
       restarted = Fuel::Chat.new(store: store, persist: ["private"], history_limit: 2) { |_, _, _| false }
