@@ -1,4 +1,5 @@
 require "./effects_spec"
+require "./legacy_outbox_fixture"
 
 class RamEventWallet < WalletRules
   def apply(tx : Fuel::AccountTransaction, actor : String, action : String, payload : JSON::Any, now : Int64) : JSON::Any
@@ -30,6 +31,28 @@ end
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "RAM-only analytics" do
+    it "migrates without recreating a retired outbox and keeps account consent" do
+      store = Fuel::Store.new(url, "outbox_#{Fuel.id}", "d" * 32, "p" * 32)
+      schema = store.namespace
+      store.db.exec("CREATE SCHEMA #{schema}")
+      begin
+        store.db.exec("SET search_path TO #{schema}")
+        store.migrate
+        store.db.query_one("SELECT to_regclass('fuel_outbox')::text", as: String?).should be_nil
+        proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+        store.bootstrap(proof, "test")
+        store.analytics_enabled(proof, false).should eq(1)
+        create_legacy_outbox(store.db)
+        store.db.exec("DROP TABLE fuel_outbox")
+        store.migrate
+        store.db.query_one("SELECT to_regclass('fuel_outbox')::text", as: String?).should be_nil
+        store.account(proof, WalletRules.new)["analytics_enabled"].as_bool.should be_false
+      ensure
+        store.db.exec("DROP SCHEMA #{schema} CASCADE")
+        store.close
+      end
+    end
+
     it "rejects NUL-bearing client properties while healthy events still reach transport" do
       store = Fuel::Store.new(url, "ram_nul_value_#{Fuel.id}", "d" * 32, "p" * 32)
       store.migrate
@@ -157,10 +180,12 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
     it "never stores accepted payloads or replays them through a restarted adapter" do
       store = Fuel::Store.new(url, "ram_restart_#{Fuel.id}", "d" * 32, "p" * 32)
       store.migrate
+      create_legacy_outbox(store.db)
       proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
       actor = store.bootstrap(proof, "test")
       legacy = Fuel.json({event_id: "legacy", name: "view"}).to_json
       store.db.exec("INSERT INTO fuel_outbox(ns,id,account,body,revision) VALUES($1,'legacy',$2,$3::jsonb,0)", store.namespace, actor, legacy)
+      store.migrate
       bodies = [] of String
       sink = Fuel::Questmetry.new(store, {"view" => [] of String}, "test", "1.0") { |body| bodies << body; 202 }
       sink.capture(proof, "one", "view", "", JSON.parse("{}")).should eq("queued")

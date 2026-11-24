@@ -1,10 +1,12 @@
 require "./effects_spec"
+require "./legacy_outbox_fixture"
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "optional analytics integration" do
     it "persists consent without an adapter and leaves inert legacy rows untouched" do
       store = Fuel::Store.new(url, "optional_analytics_#{Fuel.id}", "d" * 32, "p" * 32)
       store.migrate
+      create_legacy_outbox(store.db)
       credential = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
       other = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
       actor = store.bootstrap(credential, "test")

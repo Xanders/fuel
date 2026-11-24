@@ -36,8 +36,3 @@ CREATE TABLE IF NOT EXISTS fuel_chat (
   PRIMARY KEY(ns,id)
 );
 CREATE INDEX IF NOT EXISTS fuel_chat_history ON fuel_chat(ns,channel,created_at DESC,id DESC);
-CREATE TABLE IF NOT EXISTS fuel_outbox (
-  ns text NOT NULL, id text NOT NULL, account text NOT NULL, body jsonb NOT NULL,
-  attempts integer NOT NULL DEFAULT 0, due timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY(ns,id), FOREIGN KEY(ns,account) REFERENCES fuel_accounts(ns,id) ON DELETE CASCADE
-);

@@ -20,7 +20,7 @@ Fuel is an MIT-licensed Crystal game backend framework. A game supplies pure acc
 dependencies:
   fuel:
     github: Xanders/fuel
-    version: 0.3.14
+    version: 0.3.15
 ```
 
 Use an exact reviewed release tag or commit when updating a dependency.

@@ -21,7 +21,7 @@ independent durable attempt admission. See [trusted login](TRUSTED_LOGIN.md).
 
 Independent applications may compose prebound Runtime listeners in one process. Each retains its own namespace, sessions, origins and identity owner; the process coordinates signals and observes every listener's bounded shutdown completion before closing stores. This is local composition, not multi-instance routing. A trusted ranking reader may expose an explicitly designed public board across local namespaces while retaining source-qualified score ownership. See the [API lifecycle and ranking contracts](API.md).
 
-All active gameplay is RAM-only for every mode. No snapshot, command journal or checkpoint restores a session after restart. PostgreSQL stores permanent identity/bindings, progress, result receipts, scores, aggregate-rating source results, technical transfer state/rate counters, configured chat and the account analytics preference. Pending analytics payloads live only in RAM and can be lost. Historical outbox tables remain inert for upgrade safety; the adapter neither reads nor writes them. PostgreSQL does not store object positions or the current turn.
+All active gameplay is RAM-only for every mode. No snapshot, command journal or checkpoint restores a session after restart. PostgreSQL stores permanent identity/bindings, progress, result receipts, scores, aggregate-rating source results, technical transfer state/rate counters, configured chat and the account analytics preference. Pending analytics payloads live only in RAM and can be lost. Fuel 0.3.15 omits the historical outbox from schema setup. Existing queues remain inert until deliberately retired by their database owner. PostgreSQL does not store object positions or the current turn.
 
 A session has a random process-local ID and epoch. An unknown old session returns `session_lost`. A connection generation fences replaced sockets. Input sequence acknowledges transient inputs; it is not a persistent reward receipt.
 
@@ -30,6 +30,8 @@ Commands are scoped to actor + room epoch + ID. The same ID/revision/payload ret
 Game code receives cloned JSON so failed rule validation cannot partially mutate stored state. All mutation of one room is serialized. Independent rooms do not share a gameplay lock. Game rules and projections must be fast, nonblocking and free of external side effects.
 
 ## Resource limits
+
+Games with long-running rooms can set `Sessions.new(rules, ttl: nil)` to disable the absolute room age limit. Idle cleanup and capacity limits still apply, and restart still loses all active sessions.
 
 Persistent operations use sorted participant row locks, then binding revalidation, exact receipt lookup and pure domain execution. An exact retry returns before refreshing/applying game state. Progress, scores, notifications and the original receipt share one transaction. After successful commit, optional analytical copies are offered to the RAM sender without waiting for analytics admission or delivery. They are not part of the business commit and exact receipt retries do not regenerate them. A public action cannot select the server-only effect domain. AccountTransaction copies its descriptors and rejects undeclared business accounts; invalid/excess telemetry descriptors are dropped. Terminal receipt summaries remain readable after subsequent ordinary operations.
 

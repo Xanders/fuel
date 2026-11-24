@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.15 — allow retirement of the legacy analytics outbox
+
+Schema setup no longer creates, alters or indexes `fuel_outbox`. Existing tables and rows stay in place until the database owner performs an authorized cleanup. Account opt-out and its revision are still stored in PostgreSQL. The RAM sender and the HTTP/SDK contract are unchanged. See the [cleanup and rollback precautions](docs/SOCIAL.md#upgrading-an-existing-durable-sender).
+
+The `Sessions.new(..., ttl: nil)` option from the 0.3.8 maintenance branch is now available in the release. It disables only the absolute age limit. The default six-hour TTL and idle cleanup are unchanged.
+
 ## 0.3.14 — best-effort RAM-only analytics
 
 Questmetry now uses bounded process-local buffers and single-attempt delivery, with no durable outbox writes, restart replay or business-transaction coupling. Account/result events are offered after successful commit; telemetry-only milestones no longer consume business effect capacity or create durable receipts. Overflow, schema/admission failure and unavailable delivery may lose analytics without rolling back gameplay. Analytics does not gate process replacement/shutdown.

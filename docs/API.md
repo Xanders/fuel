@@ -72,6 +72,8 @@ A durable operation contains `operation_id,cursor,source,session_id,epoch,action
 
 ## Recovery and authority
 
+`Sessions.new(rules, ttl: nil)` removes the absolute room age limit for long-running games. By default, `ttl: 6.hours` expires even an active room once it reaches that age, subject to pending business work. Idle departure, empty settled room cleanup, room capacity and independent invite and ticket expiry still apply with `ttl: nil`.
+
 Custom trusted identity services can configure a transactional `login_authorizer`
 and pass optional `step_up` proof to `Store#redeem_login` before new-device
 activation; [the server-only contract](TRUSTED_LOGIN.md) defines authority, limits
