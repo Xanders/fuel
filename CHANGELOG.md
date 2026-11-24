@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.14 — best-effort RAM-only analytics
+
+Questmetry now uses bounded process-local buffers and single-attempt delivery, with no durable outbox writes, restart replay or business-transaction coupling. Account/result events are offered after successful commit; telemetry-only milestones no longer consume business effect capacity or create durable receipts. Overflow, schema/admission failure and unavailable delivery may lose analytics without rolling back gameplay. Analytics does not gate process replacement/shutdown.
+
+Stored account opt-out still works without an adapter and stops new admission, including delayed requests first received after opt-out. Accepted RAM tail may finish; opt-out neither purges/scans buffers nor waits for delivery. Old SQL rows remain inert and untouched by adapter/consent changes. See [adoption and rollback precautions](docs/SOCIAL.md#upgrading-an-existing-durable-sender) before changing an existing consumer. No migration, dependency or HTTP/SDK wire change; SDK0.3.7 remains compatible. Custom Crystal `enqueue(connection,...)` callers must move to post-commit `emit`; milestone settlement receipts are removed. Historical release entries below describe their original delivery contracts.
+
 ## 0.3.13 — trusted login authorization before activation
 
 An optional Store `login_authorizer` validates server-owned step-up policy before a new trusted-login binding is inserted. Its database writes, grant consumption and binding activation commit together. Exact successful retries revalidate the active proof without consuming a factor again. Configured policy adds a durable per-account admission budget outside activation rollback. No new authentication store, factor algorithm, migration, dependency, HTTP/SDK flow or change to ordinary device transfer is included.

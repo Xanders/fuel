@@ -15,6 +15,9 @@ module Fuel
     @failed = false
     @stopping = Channel(Nil).new
     @effect_cursor = 0
+    @analytics_cursor = 0
+    @analytics_busy = false
+    @analytics_at = Time.instant
     @mutex = Mutex.new
 
     def server : HTTP::Server
@@ -126,6 +129,47 @@ module Fuel
       started
     end
 
+    # Telemetry is disposable: neither delivery nor admission joins business shutdown.
+    def pump_analytics : Nil
+      reserved = @mutex.synchronize do
+        if !@stopped && !@analytics_busy && Time.instant >= @analytics_at
+          @analytics_busy = true
+          @analytics_at = Time.instant + 2.seconds
+          true
+        else
+          false
+        end
+      end
+      return unless reserved
+      spawn do
+        begin
+          rooms = @sessions.rooms
+          budget = 25
+          unless rooms.empty?
+            first = @analytics_cursor % rooms.size
+            rooms.size.times do |offset|
+              index = (first + offset) % rooms.size
+              room = rooms[index]
+              facts = room.drain_events(budget)
+              @analytics_cursor = index + 1
+              if sink = @analytics
+                facts.each do |fact|
+                  sink.emit(fact.actor, fact.id, fact.name, room.id, fact.properties, Time.unix(fact.occurred_at), fact.revision)
+                end
+              end
+              budget -= facts.size
+              break if budget == 0
+            end
+          end
+          @analytics.try(&.drain)
+        rescue
+          STDERR.puts "Fuel analytics attempt dropped"
+        ensure
+          @mutex.synchronize { @analytics_busy = false }
+        end
+      end
+    end
+
     private def settle(room : Room, effect : Effect)
       begin
         @store.apply_effect(effect, @rules, @analytics)
@@ -194,6 +238,7 @@ module Fuel
         cleanup_at = Time.instant
         while @running
           pump_effects
+          pump_analytics
           @sessions.cleanup
           if Time.instant >= cleanup_at
             cleanup_at = Time.instant + 1.hour
@@ -207,25 +252,6 @@ module Fuel
             end
           end
           wait(250.milliseconds)
-        end
-      end
-      background do
-        while @running
-          if sink = @analytics
-            stats = @sessions.stats
-            deliver = @mutex.synchronize { @accepting || stats[:active] > 0 || stats[:pending] > 0 }
-            if deliver
-              @mutex.synchronize { @inflight += 1 }
-              begin
-                sink.drain
-              rescue
-                STDERR.puts "Fuel analytics delivery postponed"
-              ensure
-                @mutex.synchronize { @inflight -= 1 }
-              end
-            end
-          end
-          wait(2.seconds)
         end
       end
       server.listen

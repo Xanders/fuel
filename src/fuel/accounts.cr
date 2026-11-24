@@ -76,8 +76,7 @@ module Fuel
     end
 
     def event(account : String, name : String, session : String, properties : JSON::Any, occurred_at : Int64)
-      Fuel.check(@states.has_key?(account) && @events.size < 16, "undeclared_account")
-      Fuel.check(properties.to_json.bytesize <= 2048, "invalid_event")
+      return unless @states.has_key?(account) && @events.size < 16 && name.bytesize <= 100 && session.bytesize <= 200 && properties.to_json.bytesize <= 2048
       @events << {account, name, session, JSON.parse(properties.to_json), occurred_at}
     end
   end
@@ -177,12 +176,9 @@ module Fuel
 
     # Consent survives temporarily disabling the optional delivery adapter.
     def analytics_enabled(credential : Credential, value : Bool) : Int64
-      with_analytics_delivery do
-        with_actor(credential) do |c, account|
-          c.exec("UPDATE fuel_accounts SET analytics_enabled=$3,analytics_revision=analytics_revision+1 WHERE ns=$1 AND id=$2 AND analytics_enabled<>$3", @namespace, account, value)
-          c.exec("DELETE FROM fuel_outbox WHERE ns=$1 AND account=$2", @namespace, account) unless value
-          c.query_one("SELECT analytics_revision FROM fuel_accounts WHERE ns=$1 AND id=$2", @namespace, account, as: Int64)
-        end
+      with_actor(credential) do |c, account|
+        c.exec("UPDATE fuel_accounts SET analytics_enabled=$3,analytics_revision=analytics_revision+1 WHERE ns=$1 AND id=$2 AND analytics_enabled<>$3", @namespace, account, value)
+        c.query_one("SELECT analytics_revision FROM fuel_accounts WHERE ns=$1 AND id=$2", @namespace, account, as: Int64)
       end
     end
 
@@ -192,6 +188,7 @@ module Fuel
     end
 
     def apply_effect(effect : Effect, rules : AccountRules, analytics : Questmetry? = nil) : JSON::Any
+      Fuel.check(effect.action != "_fuel_event", "forbidden")
       perform_operation(effect.id, effect.action, effect.payload, rules, actor: effect.actor, occurred_at: effect.occurred_at,
         session: effect.session_id, epoch: effect.epoch, analytics: analytics, preferences: effect.preferences)
     end
@@ -233,10 +230,10 @@ module Fuel
       Fuel.key(id)
       Fuel.key(action)
       Fuel.check(payload.to_json.bytesize <= 65536, "too_large")
-      transaction do |c|
+      events = [] of Tuple(String, String, String, String, JSON::Any, Int64, Int64?)
+      operation_reply = transaction do |c|
         owner = actor || identify(c, credential.not_nil!)
-        internal_event = credential.nil? && action == "_fuel_event"
-        participants = ([owner] + (internal_event ? [] of String : rules.participants(owner, action, JSON.parse(payload.to_json)))).uniq.sort
+        participants = ([owner] + rules.participants(owner, action, JSON.parse(payload.to_json))).uniq.sort
         Fuel.check(participants.size <= 16, "too_many_participants")
         participants.each do |account|
           Fuel.key(account)
@@ -244,7 +241,7 @@ module Fuel
         end
         Fuel.check(!c.query_one?("SELECT id FROM fuel_accounts WHERE ns=$1 AND id=$2", @namespace, owner, as: String).nil?, "account_missing")
         Fuel.check(verify(c, credential) == owner, "unauthorized") if credential
-        source = credential ? "public" : (internal_event ? "event" : "effect")
+        source = credential ? "public" : "effect"
         fingerprint = Digest::SHA256.hexdigest({source, action, Fuel.canonical(payload), participants, occurred_at, session, epoch, preferences.to_a.sort}.to_json)
         if prior = c.query_one?("SELECT fingerprint,reply::text FROM fuel_operations WHERE ns=$1 AND account=$2 AND id=$3", @namespace, owner, id, as: {String, String})
           Fuel.check(prior[0] == fingerprint, "conflict")
@@ -254,18 +251,13 @@ module Fuel
         states = {} of String => JSON::Any
         participants.each do |account|
           if c.query_one?("SELECT id FROM fuel_accounts WHERE ns=$1 AND id=$2", @namespace, account, as: String)
-            states[account] = internal_event ? JSON.parse(c.query_one("SELECT progress::text FROM fuel_accounts WHERE ns=$1 AND id=$2", @namespace, account, as: String)) : account_state(c, account, rules, now)
+            states[account] = account_state(c, account, rules, now)
           end
         end
         domain = AccountTransaction.new(states)
-        reply = if internal_event
-                  domain.event(owner, payload["name"].as_s, session || id, payload["properties"], now)
-                  Fuel.json({status: "recorded"})
-                else
-                  rules.apply(domain, owner, action, JSON.parse(payload.to_json), now)
-                end
+        reply = rules.apply(domain, owner, action, JSON.parse(payload.to_json), now)
         Fuel.check(reply.to_json.bytesize <= 65536, "too_large")
-        states.each { |account, state| persist_state(c, account, state) } unless internal_event
+        states.each { |account, state| persist_state(c, account, state) }
         cursor = c.query_one("INSERT INTO fuel_operations(ns,account,id,fingerprint,reply) VALUES($1,$2,$3,$4,'{}'::jsonb) RETURNING cursor", @namespace, owner, id, fingerprint, as: Int64)
         committed = Time.utc.to_unix
         receipts = domain.notifications.merge({owner => reply})
@@ -286,13 +278,23 @@ module Fuel
             SQL
           c.exec("INSERT INTO fuel_results(ns,account,id,fingerprint,reply,board,name,outcome) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8)", @namespace, account, "#{id}-#{board}", fingerprint, reply.to_json, board, name, outcome) if outcome
         end
-        if sink = analytics
+        if analytics
           domain.events.each_with_index do |(account, name, journey, properties, occurrence), index|
-            sink.enqueue(c, account, Digest::SHA256.hexdigest({owner, id, index}.to_json), name, journey, properties, Time.unix(occurrence), preferences[account]?)
+            events << {account, Digest::SHA256.hexdigest({owner, id, index}.to_json), name, journey, properties, occurrence, preferences[account]?}
           end
         end
         result
       end
+      if sink = analytics
+        events.each do |account, event_id, name, journey, properties, occurrence, revision|
+          begin
+            sink.emit(account, event_id, name, journey, properties, Time.unix(occurrence), revision)
+          rescue
+            # A malformed telemetry occurrence cannot change a committed receipt.
+          end
+        end
+      end
+      operation_reply
     end
 
     private def identify(c : DB::Connection, credential : Credential) : String

@@ -14,19 +14,17 @@ module Fuel
     def delete_account(credential : Credential, confirmed : Bool, proof : String, expected_account : String, &purge : DB::Connection, String ->) : JSON::Any
       Fuel.check(confirmed, "confirmation_required")
       validate_deletion(proof, expected_account)
-      with_analytics_delivery do
-        with_actor(credential) do |c, actor|
-          Fuel.check(actor == expected_account, "conflict")
-          key = deletion_digest("proof", proof)
-          Fuel.check(c.query_one?("SELECT proof FROM fuel_deletions WHERE ns=$1 AND proof=$2", @namespace, key, as: String).nil?, "conflict")
-          bindings = [] of String
-          c.query("SELECT id FROM fuel_bindings WHERE ns=$1 AND account=$2 ORDER BY id", @namespace, actor) { |rs| rs.each { bindings << rs.read(String) } }
-          result = Fuel.json({status: "deleted", removed_bindings: bindings})
-          c.exec("INSERT INTO fuel_deletions(ns,proof,account_digest,result) VALUES($1,$2,$3,$4::jsonb)", @namespace, key, deletion_digest("account", actor), result.to_json)
-          yield c, actor
-          purge_account(c, actor)
-          result
-        end
+      with_actor(credential) do |c, actor|
+        Fuel.check(actor == expected_account, "conflict")
+        key = deletion_digest("proof", proof)
+        Fuel.check(c.query_one?("SELECT proof FROM fuel_deletions WHERE ns=$1 AND proof=$2", @namespace, key, as: String).nil?, "conflict")
+        bindings = [] of String
+        c.query("SELECT id FROM fuel_bindings WHERE ns=$1 AND account=$2 ORDER BY id", @namespace, actor) { |rs| rs.each { bindings << rs.read(String) } }
+        result = Fuel.json({status: "deleted", removed_bindings: bindings})
+        c.exec("INSERT INTO fuel_deletions(ns,proof,account_digest,result) VALUES($1,$2,$3,$4::jsonb)", @namespace, key, deletion_digest("account", actor), result.to_json)
+        yield c, actor
+        purge_account(c, actor)
+        result
       end
     end
 

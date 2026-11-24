@@ -112,6 +112,7 @@ module Fuel
     @receipt_log = {} of String => Array(JSON::Any)
     @analytics_revisions = {} of String => Int64
     @milestones = Set(String).new
+    @events = [] of SessionEvent
     @activity = {} of String => Time::Instant
     @mutex = Mutex.new
 
@@ -347,12 +348,11 @@ module Fuel
         return unless @pending.first?.try(&.id) == effect.id && @effect_inflight
         reply = receipts[effect.actor]? || raise Error.new("missing_receipt")
         backlog_before = @backlog
-        candidate = effect.action == "_fuel_event" ? JSON.parse(@state.to_json) : @rules.acknowledge(JSON.parse(@state.to_json), effect, reply)
+        candidate = @rules.acknowledge(JSON.parse(@state.to_json), effect, reply)
         publish_candidate(candidate, effect.id)
         @effect_inflight = false
         @effect_retry_at = nil
         receipts.each do |actor, receipt|
-          next if receipt["source"]?.try(&.as_s) == "event"
           next unless @members.includes?(actor)
           sequence = (@receipt_sequences[actor]? || 0_i64) + 1_i64
           @receipt_sequences[actor] = sequence
@@ -397,12 +397,16 @@ module Fuel
         @settled.includes?(actor) ? nil : @results[actor]?
       end
       return unless result
-      store.record_result(credential, @id, result.board, result.score, result.name, result.progress, result.outcome) do |c, account|
-        if sink = analytics
-          sink.enqueue(c, account, @id + actor, "session_finished", @id, JSON.parse("{}"))
-        end
+      newly_committed = false
+      store.record_result(credential, @id, result.board, result.score, result.name, result.progress, result.outcome) do |_, _|
+        newly_committed = true
       end
       @mutex.synchronize { @settled.add(actor) }
+      analytics.try(&.emit(actor, @id + actor, "session_finished", @id, JSON.parse("{}"))) if newly_committed
+    end
+
+    def drain_events(limit = 25) : Array(SessionEvent)
+      @mutex.synchronize { @events.shift(Math.min(Math.max(limit, 0), @events.size)) }
     end
 
     private def freeze_results
@@ -434,13 +438,11 @@ module Fuel
       Digest::SHA256.hexdigest({effect.actor, effect.action, Fuel.canonical(effect.payload)}.to_json)
     end
 
-    private def publish_candidate(candidate : JSON::Any, remove : String? = nil, excluding : String? = nil, preferences = {} of String => Int64, facts = [] of Effect)
+    private def publish_candidate(candidate : JSON::Any, remove : String? = nil, excluding : String? = nil, preferences = {} of String => Int64, facts = [] of SessionEvent)
       Fuel.check(@effect_error.nil?, "saving_backlog")
       retained = @pending.reject { |effect| effect.id == remove }
       seen = Set(String).new
-      fresh = facts.reject { |fact| @milestones.includes?(fact.id) }
-      Fuel.check(@milestones.size + fresh.size <= 16384, "milestone_capacity")
-      (@rules.effects(JSON.parse(candidate.to_json), Time.utc.to_unix) + fresh).each do |descriptor|
+      @rules.effects(JSON.parse(candidate.to_json), Time.utc.to_unix).each do |descriptor|
         id = "#{@epoch}-#{descriptor.id}"
         Fuel.check(id != remove, "effect_acknowledgement")
         Fuel.check(seen.add?(id), "effect_conflict")
@@ -463,7 +465,13 @@ module Fuel
       @state = candidate
       @pending = retained
       @analytics_revisions.merge!(preferences)
-      fresh.each { |fact| @milestones.add(fact.id) }
+      facts.each do |fact|
+        next if @milestones.includes?(fact.id) || @milestones.size >= 16384
+        @milestones.add(fact.id)
+        next if @events.size >= 256
+        @events << SessionEvent.new("#{@epoch}-#{fact.id}", fact.actor, fact.name, fact.properties,
+          fact.occurred_at, @analytics_revisions[fact.actor]?)
+      end
       @backlog = false
     end
 

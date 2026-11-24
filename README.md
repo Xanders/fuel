@@ -2,7 +2,7 @@
 
 Fuel is an MIT-licensed Crystal game backend framework. A game supplies pure account/combat rules and player-specific views; Fuel owns identity, persistence, sessions, joining, matching, transport, reliable effects and recovery.
 
-**Status: 0.3 development preview.** One backend process, tested Crystal 1.22.1 and PostgreSQL 17. Pin both peers to the same reviewed release; development APIs may change. No registry publication or production deployment is implied.
+**Status: 0.3 development preview.** One backend process, tested Crystal 1.22.1 and PostgreSQL 17. Pin backend and SDK to reviewed compatible commits/releases; development APIs may change. No registry publication or production deployment is implied.
 
 ## Deliberate limits
 
@@ -20,10 +20,10 @@ Fuel is an MIT-licensed Crystal game backend framework. A game supplies pure acc
 dependencies:
   fuel:
     github: Xanders/fuel
-    version: ~> 0.3.0
+    version: 0.3.14
 ```
 
-Until a version tag is published, pin a reviewed commit instead of using the version constraint above.
+Use an exact reviewed release tag or commit when updating a dependency.
 
 Implement `Fuel::Rules` for RAM gameplay and `Fuel::AccountRules` for permanent game state/actions. `Fuel::Runtime` runs the shared lifecycle, fixed-step ticker, FIFO durable effects and optional analytics. [The counter example](examples/counter.cr) is a complete neutral server using the simpler completion hook.
 
@@ -41,7 +41,7 @@ Implement `Fuel::Rules` for RAM gameplay and `Fuel::AccountRules` for permanent 
 - Best-score leaderboards and outcome ratings; games own display names and scoring rules.
 - Instance-global, session, guild-policy and private chat; bounded RAM and optional PostgreSQL history per kind, mutes, reports and configurable literal-word censor/glyph variants.
 - Consumer-provided localized dictionary name generation.
-- Optional Questmetry delivery with a PostgreSQL outbox, stable event IDs, retry and opt-out. No analytics service is contacted unless configured.
+- Optional Questmetry delivery with bounded RAM-only buffers and single-attempt background delivery. Stored opt-out stops new admission; accepted tail may finish. No analytics service is contacted unless configured.
 
 Only `pg` is a direct runtime shard dependency; `db` is transitive. EventWinder is not required.
 

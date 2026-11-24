@@ -23,11 +23,6 @@ module Fuel
   class Store
     getter db : DB::Database
     getter namespace : String
-    @analytics_delivery = Mutex.new
-
-    def with_analytics_delivery(&)
-      @analytics_delivery.synchronize { yield }
-    end
 
     def initialize(url : String, @namespace : String, @device_key : String, @pair_key : String, @previous_device_keys = [] of String, @max_accounts = 1000000, @login_authorizer : LoginAuthorizer? = nil)
       Fuel.check(url.starts_with?("postgres://") || url.starts_with?("postgresql://"), "postgres_required")
@@ -248,11 +243,9 @@ module Fuel
 
     def delete_account(credential : Credential, confirmed : Bool, &purge : DB::Connection, String ->)
       Fuel.check(confirmed, "confirmation_required")
-      with_analytics_delivery do
-        with_actor(credential) do |c, account|
-          yield c, account
-          purge_account(c, account)
-        end
+      with_actor(credential) do |c, account|
+        yield c, account
+        purge_account(c, account)
       end
     end
 

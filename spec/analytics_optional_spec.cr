@@ -2,7 +2,7 @@ require "./effects_spec"
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "optional analytics integration" do
-    it "persists and purges an account's consent without a configured delivery adapter" do
+    it "persists consent without an adapter and leaves inert legacy rows untouched" do
       store = Fuel::Store.new(url, "optional_analytics_#{Fuel.id}", "d" * 32, "p" * 32)
       store.migrate
       credential = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
@@ -26,14 +26,14 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
         disabled.status_code.should eq(200)
         JSON.parse(disabled.body)["data"]["revision"].as_s.should eq("1")
         store.account(credential, rules)["analytics_enabled"].as_bool.should be_false
-        store.db.query_one("SELECT count(*) FROM fuel_outbox WHERE ns=$1 AND account=$2", store.namespace, actor, as: Int64).should eq(0)
+        store.db.query_one("SELECT count(*) FROM fuel_outbox WHERE ns=$1 AND account=$2", store.namespace, actor, as: Int64).should eq(1)
         store.db.query_one("SELECT count(*) FROM fuel_outbox WHERE ns=$1 AND account=$2", store.namespace, other_actor, as: Int64).should eq(1)
         repeated = client.post("/fuel/v1/analytics/enabled", headers, {enabled: false}.to_json)
         JSON.parse(repeated.body)["data"]["revision"].as_s.should eq("1")
         enabled = client.post("/fuel/v1/analytics/enabled", headers, {enabled: true}.to_json)
         JSON.parse(enabled.body)["data"]["revision"].as_s.should eq("2")
         store.account(credential, rules)["analytics_enabled"].as_bool.should be_true
-        store.db.query_one("SELECT count(*) FROM fuel_outbox WHERE ns=$1 AND account=$2", store.namespace, actor, as: Int64).should eq(0)
+        store.db.query_one("SELECT count(*) FROM fuel_outbox WHERE ns=$1 AND account=$2", store.namespace, actor, as: Int64).should eq(1)
         client.post("/fuel/v1/analytics/events", headers, {id: "new", name: "view", session: "", revision: "2", properties: {} of String => String}.to_json).status_code.should eq(400)
       ensure
         client.close

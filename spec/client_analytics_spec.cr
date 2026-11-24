@@ -85,6 +85,7 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
         invalid = Fuel.json({id: Fuel.id, name: "screen_viewed", session: "", properties: {screen: "private text"}, revision: "0"})
         client.post("/fuel/v1/analytics/events", headers, invalid.to_json).status_code.should eq(400)
         sink.enabled(proof, false)
+        event.as_h["id"] = JSON::Any.new(Fuel.id)
         stale = client.post("/fuel/v1/analytics/events", headers, event.to_json)
         JSON.parse(stale.body)["data"]["status"].as_s.should eq("stale")
         sink.enabled(proof, true)

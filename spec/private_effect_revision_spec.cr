@@ -20,17 +20,14 @@ class InvisibleEffectRules < EffectRules
 end
 
 def finish_milestones(room)
-  while effect = room.begin_effect
-    effect.action.should eq("_fuel_event")
-    room.finish_effect(effect, {effect.actor => Fuel.json({source: "event", reply: {status: "recorded"}})})
-  end
+  room.drain_events
 end
 
 describe "settlement publication" do
-  it "keeps unrelated private revisions unchanged after analytics-only acknowledgement" do
+  it "keeps private revisions unchanged when draining independent analytics" do
     room = Fuel::Room.new(HiddenMilestoneRules.new, "alice", "duel", 2, false)
     room.join(["bob"])
-    room.pending_effects.should eq(2)
+    room.pending_effects.should eq(0)
     finish_milestones(room)
     before = room.snapshot("bob")
     revision = room.snapshot("alice")["revision"].as_s.to_i64
@@ -78,20 +75,20 @@ describe "settlement publication" do
     end
   end
 
-  it "publishes clearing visible saving backpressure to all viewers" do
-    room = Fuel::Room.new(HiddenMilestoneRules.new, "alice", "duel", 2, false, effect_limit: 2)
+  it "publishes clearing business saving backpressure to all viewers" do
+    room = Fuel::Room.new(InvisibleEffectRules.new, "alice", "duel", 2, false, effect_limit: 2)
     room.join(["bob"])
     finish_milestones(room)
     ["first", "second"].each do |name|
-      room.command("alice", room.epoch, name, room.snapshot("alice")["revision"].as_s.to_i64, Fuel.json({amount: 1, event: name}))
+      room.command("alice", room.epoch, name, room.snapshot("alice")["revision"].as_s.to_i64, Fuel.json({id: name}))
     end
     expect_raises(Fuel::Error, "saving_backlog") do
-      room.command("alice", room.epoch, "third", room.snapshot("alice")["revision"].as_s.to_i64, Fuel.json({amount: 1, event: "third"}))
+      room.command("alice", room.epoch, "third", room.snapshot("alice")["revision"].as_s.to_i64, Fuel.json({id: "third"}))
     end
     before = room.snapshot("bob")
     before["saving_backlog"].as_bool.should be_true
     effect = room.begin_effect.not_nil!
-    room.finish_effect(effect, {"alice" => Fuel.json({source: "event", reply: {status: "recorded"}})})
+    room.finish_effect(effect, {"alice" => Fuel.json({source: "effect", reply: {status: "committed"}})})
     after = room.snapshot("bob")
     after["saving_backlog"].as_bool.should be_false
     after["state"].should eq(before["state"])

@@ -2,9 +2,17 @@ require "http/client"
 
 module Fuel
   class Questmetry
+    record Submission, account : String, id : String, name : String, session : String, properties : JSON::Any, occurred_at : Time, revision : Int64?
     @send : Proc(String, Int32)
     @client_events : Set(String)
-    getter omitted = 0_i64
+    @admissions = [] of Submission
+    @pending = [] of Tuple(String, String)
+    @ids = Set(String).new
+    @used = 0
+    @omitted = 0_i64
+    @admitting = false
+    @draining = false
+    @mutex = Mutex.new
 
     def initialize(@store : Store, @events : Hash(String, Array(String)), @environment : String, @version : String,
                    @pseudonym_key : String? = nil, @max_pending = 10000,
@@ -18,6 +26,8 @@ module Fuel
       Fuel.check(@playtest.nil? || @playtest.not_nil!.matches?(/\A[a-zA-Z0-9_-]{1,80}\z/), "invalid_analytics_config")
       Fuel.check(client_events.all? { |name| @events.has_key?(name) }, "invalid_analytics_config")
       @client_events = client_events.to_set
+      @events = @events.transform_values(&.dup)
+      @context = JSON.parse(@context.to_json)
     end
 
     def self.http(store : Store, events : Hash(String, Array(String)), environment : String, version : String, endpoint : String, write_key : String,
@@ -41,46 +51,115 @@ module Fuel
     end
 
     def capture(credential : Credential, id : String, name : String, session : String, properties : JSON::Any, occurred_at : Time = Time.utc, revision : Int64? = nil) : String
-      @store.with_actor(credential) { |c, account| enqueue(c, account, id, name, session, properties, occurred_at, revision) }
+      validate(id, name, session, properties)
+      @store.with_actor(credential) { |c, account| admit(c, account, id, name, session, properties, occurred_at, revision) }
     end
 
     def capture_client(credential : Credential, id : String, name : String, session : String, properties : JSON::Any, revision : Int64) : String
       Fuel.key(id)
       Fuel.check(@client_events.includes?(name) && revision >= 0, "invalid_event")
+      validate(id, name, session, properties)
       @store.with_actor(credential) do |c, account|
         client_id = @store.digest("analytics-client-id", {account, id}.to_json)
-        enqueue(c, account, client_id, name, session, properties, revision: revision, source: "client")
+        admit(c, account, client_id, name, session, properties, Time.utc, revision, "client")
       end
     end
 
-    # Use inside record_result's effect block for atomic result/event creation.
-    def enqueue(c : DB::Connection, account : String, id : String, name : String, session : String, properties : JSON::Any, occurred_at : Time = Time.utc, revision : Int64? = nil, source : String = "server") : String
+    # Call after business commit; one bounded background worker admits server facts.
+    def emit(account : String, id : String, name : String, session : String, properties : JSON::Any, occurred_at : Time = Time.utc, revision : Int64? = nil) : Nil
+      Fuel.key(account)
+      Fuel.key(id)
+      Fuel.key(name)
+      return if session.bytesize > 200 || properties.to_json.bytesize > 2048
+      submission = Submission.new(account, id, name, session, JSON.parse(properties.to_json), occurred_at, revision)
+      start = @mutex.synchronize do
+        return unless reserve
+        @admissions << submission
+        if @admitting
+          false
+        else
+          @admitting = true
+          true
+        end
+      end
+      spawn admit_pending if start
+    rescue
+      # Telemetry never changes a committed business result.
+    end
+
+    private def validate(id : String, name : String, session : String, properties : JSON::Any)
       Fuel.key(id)
       Fuel.key(name)
       Fuel.check(session.bytesize <= 200, "invalid_event")
-      Fuel.check(source.in?("server", "client"), "invalid_event")
       allowed = @events[name]?
       Fuel.check(!allowed.nil? && properties.as_h.keys.all? { |k| allowed.not_nil!.includes?(k) }, "invalid_event")
       Fuel.check(properties.to_json.bytesize <= 2048 && properties.as_h.values.all? { |v| v.raw.is_a?(String) || v.raw.is_a?(Bool) || v.raw.is_a?(Int64) }, "invalid_event")
       Fuel.check(@validate.call(name, properties), "invalid_event")
-      enabled, current = c.query_one("SELECT analytics_enabled,analytics_revision FROM fuel_accounts WHERE ns=$1 AND id=$2 FOR UPDATE", @store.namespace, account, as: {Bool, Int64})
+    end
+
+    private def admit_pending
+      loop do
+        submission = @mutex.synchronize do
+          if @admissions.empty?
+            @admitting = false
+            return
+          end
+          @admissions.shift
+        end
+        accepted = false
+        begin
+          validate(submission.id, submission.name, submission.session, submission.properties)
+          @store.db.transaction do |tx|
+            accepted = admit(tx.connection, submission.account, submission.id, submission.name, submission.session,
+              submission.properties, submission.occurred_at, submission.revision, reserved: true) == "queued"
+          end
+        rescue
+          # Failed admission is dropped; no durable journal or replay exists.
+        ensure
+          @mutex.synchronize { @used -= 1 } unless accepted
+        end
+      end
+    end
+
+    private def admit(c : DB::Connection, account : String, id : String, name : String, session : String, properties : JSON::Any, occurred_at : Time,
+                      revision : Int64?, source : String = "server", reserved = false) : String
+      preference = c.query_one?("SELECT analytics_enabled,analytics_revision FROM fuel_accounts WHERE ns=$1 AND id=$2 FOR UPDATE", @store.namespace, account, as: {Bool, Int64})
+      return "disabled" unless preference
+      enabled, current = preference
       return "stale" if revision && revision != current
       return "disabled" unless enabled
-      c.exec("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", "#{@store.namespace}:outbox")
-      return "duplicate" if c.query_one?("SELECT id FROM fuel_outbox WHERE ns=$1 AND id=$2", @store.namespace, id, as: String)
-      count = c.query_one("SELECT count(*) FROM fuel_outbox WHERE ns=$1", @store.namespace, as: Int64)
-      if count >= @max_pending
-        @omitted += 1
-        STDERR.puts "Fuel analytics capacity reached; new events omitted" if @omitted == 1
-        return "capacity"
-      end
       body = Fuel.json({event_id: id, name: name, schema_version: 1, occurred_at: occurred_at.to_rfc3339,
                         source: source, environment: @environment, app_version: @version,
                         anonymous_id: pseudonym("account", account), session_id: pseudonym("session", {account, session}.to_json), properties: properties, context: @context})
       body.as_h["playtest_id"] = JSON::Any.new(@playtest.not_nil!) if @playtest
       body.as_h.delete("session_id") if session.empty?
-      c.exec("INSERT INTO fuel_outbox(ns,id,account,body,revision) VALUES($1,$2,$3,$4::jsonb,$5) ON CONFLICT DO NOTHING", @store.namespace, id, account, body.to_json, current)
-      "queued"
+      encoded = body.to_json
+      @mutex.synchronize do
+        return "duplicate" if @ids.includes?(id)
+        return "capacity" unless reserved || reserve
+        @ids.add(id)
+        @pending << {id, encoded}
+        "queued"
+      end
+    end
+
+    # Includes queued admission, accepted events and the in-flight batch.
+    private def reserve : Bool
+      if @used >= @max_pending
+        @omitted += 1
+        false
+      else
+        @used += 1
+        true
+      end
+    end
+
+    def omitted : Int64
+      @mutex.synchronize { @omitted }
+    end
+
+    def pending : Int32
+      @mutex.synchronize { @used }
     end
 
     def preference(credential : Credential) : Int64
@@ -91,14 +170,13 @@ module Fuel
       @store.analytics_enabled(credential, value)
     end
 
+    # Compatibility only: single-attempt delivery has no halted/recoverable tail.
     def halted : Int64
-      @store.db.query_one("SELECT count(*) FROM fuel_outbox WHERE ns=$1 AND halted AND created_at>=now()-interval '7 days'", @store.namespace, as: Int64)
+      0_i64
     end
 
     def resume(now = Time.utc) : Int64
-      @store.with_analytics_delivery do
-        @store.db.exec("UPDATE fuel_outbox o SET halted=false,attempts=0,due=$2 FROM fuel_accounts a WHERE o.ns=$1 AND a.ns=o.ns AND a.id=o.account AND a.analytics_enabled AND a.analytics_revision=o.revision AND o.halted AND o.created_at>=$2::timestamptz-interval '7 days'", @store.namespace, now).rows_affected
-      end
+      0_i64
     end
 
     private def pseudonym(kind : String, value : String) : String
@@ -109,33 +187,23 @@ module Fuel
       end
     end
 
-    # The shared delivery gate fences opt-out/deletion, without holding a
-    # gameplay account lock or a database transaction during external IO.
+    # One best-effort batch. No account lookup, opt-out fence or retry on delivery.
     def drain(now = Time.utc)
-      @store.with_analytics_delivery do
-        @store.db.exec("DELETE FROM fuel_outbox WHERE ns=$1 AND created_at<$2::timestamptz-interval '7 days'", @store.namespace, now)
-        rows = [] of Tuple(String, String, Int32)
-        @store.db.query("SELECT o.id,o.body::text,o.attempts FROM fuel_outbox o JOIN fuel_accounts a ON a.ns=o.ns AND a.id=o.account WHERE o.ns=$1 AND NOT o.halted AND o.due<=$2 AND a.analytics_enabled AND a.analytics_revision=o.revision ORDER BY o.due,o.id LIMIT 25", @store.namespace, now) { |rs| rs.each { rows << rs.read(String, String, Int32) } }
-        return if rows.empty?
-        status = begin
-          @send.call({events: rows.map { |row| JSON.parse(row[1]) }}.to_json)
-        rescue
-          503
+      rows = @mutex.synchronize do
+        return if @draining
+        @draining = true
+        @pending.shift({@pending.size, 25}.min)
+      end
+      begin
+        @send.call({events: rows.map { |_, body| JSON.parse(body) }}.to_json) unless rows.empty?
+      rescue
+        # Network/configuration failures discard this batch.
+      ensure
+        @mutex.synchronize do
+          rows.each { |id, _| @ids.delete(id) }
+          @used -= rows.size
+          @draining = false
         end
-        configuration_error = status != 202 && status != 429 && status < 500 && status > 0
-        @store.db.transaction do |tx|
-          c = tx.connection
-          rows.each do |id, _, attempts|
-            if status == 202
-              c.exec("DELETE FROM fuel_outbox WHERE ns=$1 AND id=$2", @store.namespace, id)
-            else
-              halted = configuration_error || attempts >= 11
-              delay = {2 ** (attempts + 1).clamp(1, 9), 300}.min + Random.rand(0..30)
-              c.exec("UPDATE fuel_outbox SET attempts=attempts+1,due=$3,halted=$4 WHERE ns=$1 AND id=$2", @store.namespace, id, now + delay.seconds, halted)
-            end
-          end
-        end
-        STDERR.puts "Fuel analytics delivery halted; verify configuration" if configuration_error
       end
     end
   end

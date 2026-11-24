@@ -7,21 +7,22 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
     a = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
     account = store.bootstrap(a, "test")
 
-    it "keeps event IDs on retry and purges queued events on opt-out" do
+    it "keeps original occurrence and pseudonyms while allowing accepted RAM tail after opt-out" do
       bodies = [] of String
-      status = 503
+      status = 202
       analytics = Fuel::Questmetry.new(store, {"match_finished" => ["mode"]}, "test", "0.1.0") do |body|
         bodies << body
         status
       end
       id = Fuel.id
-      analytics.capture(a, id, "match_finished", "match", JSON.parse(%({"mode":"duel"})))
+      original = Time.unix(1000)
+      analytics.capture(a, id, "match_finished", "match", JSON.parse(%({"mode":"duel"})), original)
       analytics.drain
       bodies.size.should eq(1)
       bodies.first.should_not contain(account)
-      status = 202
       analytics.drain(Time.utc + 1.hour)
       JSON.parse(bodies.last)["events"][0]["event_id"].as_s.should eq(id)
+      JSON.parse(bodies.last)["events"][0]["occurred_at"].as_s.should eq(original.to_rfc3339)
       expect_raises(Fuel::Error, "invalid_event") { analytics.capture(a, Fuel.id, "match_finished", "m", JSON.parse(%({"text":"secret chat"}))) }
       analytics.capture(a, Fuel.id, "match_finished", "m", JSON.parse(%({"mode":"duel"})))
       analytics.enabled(a, false)
