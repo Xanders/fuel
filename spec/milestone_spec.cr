@@ -107,6 +107,54 @@ describe "best-effort room milestones" do
 end
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
+  describe "analytics Store lifetime" do
+    it "closes an actual second admission connection while its SQL is blocked" do
+      store = Fuel::Store.new(url, "analytics_owned_connection_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      credential = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      actor = store.bootstrap(credential, "test")
+      first = store.db.checkout
+      blocker = DB.open(url)
+      checked_out = Channel(DB::Connection).new(1)
+      finished = Channel(Nil).new(1)
+      begin
+        blocker.transaction do |transaction|
+          transaction.connection.query_one("SELECT id FROM fuel_accounts WHERE ns=$1 AND id=$2 FOR UPDATE", store.namespace, actor, as: String)
+          spawn do
+            begin
+              store.with_analytics_admission do |connection|
+                checked_out.send(connection)
+                connection.query_one("SELECT analytics_revision FROM fuel_accounts WHERE ns=$1 AND id=$2 FOR UPDATE", store.namespace, actor, as: Int64)
+              end
+            rescue
+              # Closing disposable admission is allowed to interrupt its query.
+            ensure
+              finished.send(nil)
+            end
+          end
+          connection = select
+          when handle = checked_out.receive
+            handle
+          when timeout(3.seconds)
+            fail "analytics connection was not checked out"
+          end
+          store.close
+          connection.closed?.should be_true
+        end
+        select
+        when finished.receive
+        when timeout(3.seconds)
+          fail "closed analytics admission did not exit"
+        end
+      ensure
+        first.close
+        first.release
+        blocker.close
+        store.close
+      end
+    end
+  end
+
   describe "milestones independent of analytics delivery" do
     it "keeps the result consent revision from creation across a later room preference refresh" do
       store = Fuel::Store.new(url, "result_consent_#{Fuel.id}", "d" * 32, "p" * 32)

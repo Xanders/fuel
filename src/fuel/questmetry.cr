@@ -51,11 +51,20 @@ module Fuel
     end
 
     def capture(credential : Credential, id : String, name : String, session : String, properties : JSON::Any, occurred_at : Time = Time.utc, revision : Int64? = nil) : String
+      properties = JSON.parse(properties.to_json)
+      unless revision
+        enabled, current = @store.with_actor(credential) do |c, account|
+          c.query_one("SELECT analytics_enabled,analytics_revision FROM fuel_accounts WHERE ns=$1 AND id=$2", @store.namespace, account, as: {Bool, Int64})
+        end
+        return "disabled" unless enabled
+        revision = current
+      end
       validate(id, name, session, properties)
       @store.with_actor(credential) { |c, account| admit(c, account, id, name, session, properties, occurred_at, revision) }
     end
 
     def capture_client(credential : Credential, id : String, name : String, session : String, properties : JSON::Any, revision : Int64) : String
+      properties = JSON.parse(properties.to_json)
       Fuel.key(id)
       Fuel.check(@client_events.includes?(name) && revision >= 0, "invalid_event")
       validate(id, name, session, properties)
@@ -95,7 +104,7 @@ module Fuel
       allowed = @events[name]?
       Fuel.check(!allowed.nil? && properties.as_h.keys.all? { |k| allowed.not_nil!.includes?(k) }, "invalid_event")
       Fuel.check(properties.to_json.bytesize <= 2048 && properties.as_h.values.all? { |v| v.raw.is_a?(String) || v.raw.is_a?(Bool) || v.raw.is_a?(Int64) }, "invalid_event")
-      Fuel.check(@validate.call(name, properties), "invalid_event")
+      Fuel.check(@validate.call(name.dup, JSON.parse(properties.to_json)), "invalid_event")
     end
 
     private def admit_pending
@@ -126,7 +135,7 @@ module Fuel
 
     private def admit(c : DB::Connection, account : String, id : String, name : String, session : String, properties : JSON::Any, occurred_at : Time,
                       revision : Int64?, source : String = "server", reserved = false) : String
-      preference = c.query_one?("SELECT analytics_enabled,analytics_revision FROM fuel_accounts WHERE ns=$1 AND id=$2 FOR UPDATE", @store.namespace, account, as: {Bool, Int64})
+      preference = c.query_one?("SELECT analytics_enabled,analytics_revision FROM fuel_accounts WHERE ns=$1 AND id=$2 FOR UPDATE NOWAIT", @store.namespace, account, as: {Bool, Int64})
       return "disabled" unless preference
       enabled, current = preference
       return "stale" if revision && revision != current
@@ -137,12 +146,14 @@ module Fuel
       body.as_h["playtest_id"] = JSON::Any.new(@playtest.not_nil!) if @playtest
       body.as_h.delete("session_id") if session.empty?
       encoded = body.to_json
-      @mutex.synchronize do
-        return "duplicate" if @ids.includes?(id)
-        return "capacity" unless reserved || reserve
-        @ids.add(id)
-        @pending << {id, encoded}
-        "queued"
+      @store.accept_analytics do
+        @mutex.synchronize do
+          return "duplicate" if @ids.includes?(id)
+          return "capacity" unless reserved || reserve
+          @ids.add(id)
+          @pending << {id, encoded}
+          "queued"
+        end
       end
     end
 

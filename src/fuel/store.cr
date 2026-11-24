@@ -25,6 +25,7 @@ module Fuel
     getter namespace : String
     @closed = false
     @lifecycle = Mutex.new
+    @analytics_connections = Set(DB::Connection).new
 
     def initialize(url : String, @namespace : String, @device_key : String, @pair_key : String, @previous_device_keys = [] of String, @max_accounts = 1000000, @login_authorizer : LoginAuthorizer? = nil)
       Fuel.check(url.starts_with?("postgres://") || url.starts_with?("postgresql://"), "postgres_required")
@@ -40,7 +41,11 @@ module Fuel
     end
 
     def close
-      @lifecycle.synchronize { @closed = true }
+      connections = @lifecycle.synchronize do
+        @closed = true
+        @analytics_connections.to_a
+      end
+      connections.each(&.close)
       @db.close
     end
 
@@ -48,16 +53,33 @@ module Fuel
       @lifecycle.synchronize { @closed }
     end
 
+    # Only the final RAM insertion belongs inside this short lifetime boundary.
+    def accept_analytics(&) : String
+      @lifecycle.synchronize { @closed ? "disabled" : yield }
+    end
+
     # A late detached admission must not reopen the driver's reusable pool.
     def with_analytics_admission(&) : Nil
       return if closed?
       connection = @db.checkout
       begin
-        return if closed?
+        registered = @lifecycle.synchronize do
+          if @closed
+            false
+          else
+            @analytics_connections.add(connection)
+            true
+          end
+        end
+        return unless registered
         connection.transaction { |tx| yield tx.connection }
       ensure
-        connection.close if closed?
-        connection.release
+        begin
+          connection.close if closed?
+          connection.release
+        ensure
+          @lifecycle.synchronize { @analytics_connections.delete(connection) }
+        end
       end
       nil
     end

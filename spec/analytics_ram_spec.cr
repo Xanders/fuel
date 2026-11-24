@@ -273,5 +273,67 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
       sink.pending.should eq(0)
       store.close
     end
+
+    [false, true].each do |initially_enabled|
+      it "snapshots standalone consent before a suspended validator can be overtaken by opt-in (enabled=#{initially_enabled})" do
+        store = Fuel::Store.new(url, "ram_capture_snapshot_#{Fuel.id}", "d" * 32, "p" * 32)
+        store.migrate
+        proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+        store.bootstrap(proof, "test")
+        store.analytics_enabled(proof, false) unless initially_enabled
+        started, release = Channel(Nil).new(1), Channel(Nil).new(1)
+        result = Channel(String).new(1)
+        sent = 0
+        sink = Fuel::Questmetry.new(store, {"view" => [] of String}, "test", "1.0",
+          validate: ->(name : String, props : JSON::Any) { started.send(nil); release.receive; true }) { |_| sent += 1; 202 }
+        begin
+          spawn { result.send(sink.capture(proof, "one", "view", "", JSON.parse("{}"))) }
+          first = select
+          when started.receive then "validating"
+          when value = result.receive then value
+          when timeout(3.seconds) then "timeout"
+          end
+          store.analytics_enabled(proof, false) if initially_enabled
+          store.analytics_enabled(proof, true)
+          release.send(nil)
+          status = if first == "validating"
+                     select
+                     when value = result.receive then value
+                     when timeout(3.seconds) then "timeout"
+                     end
+                   else
+                     first
+                   end
+          sink.drain
+          status.should eq(initially_enabled ? "stale" : "disabled")
+          sent.should eq(0)
+        ensure
+          ram_release(release)
+          store.close
+        end
+      end
+    end
+
+    it "treats schema validation as a predicate over a copy of the frozen payload" do
+      store = Fuel::Store.new(url, "ram_validator_copy_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      store.bootstrap(proof, "test")
+      delivered = [] of JSON::Any
+      sink = Fuel::Questmetry.new(store, {"view" => ["kind"]}, "test", "1.0",
+        validate: ->(name : String, props : JSON::Any) {
+          props.as_h["kind"] = JSON::Any.new("x" * 300_000)
+          props.as_h["not_allowed"] = JSON::Any.new(true)
+          true
+        }) { |body| delivered.concat(JSON.parse(body)["events"].as_a); 202 }
+      begin
+        sink.capture(proof, "one", "view", "", Fuel.json({kind: "small"})).should eq("queued")
+        sink.drain
+        delivered.first.to_json.bytesize.should be < 4096
+        delivered.first["properties"].should eq(Fuel.json({kind: "small"}))
+      ensure
+        store.close
+      end
+    end
   end
 end
