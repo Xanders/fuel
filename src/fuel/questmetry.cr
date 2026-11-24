@@ -22,7 +22,7 @@ module Fuel
       Fuel.key(@environment)
       Fuel.check(@environment.bytesize <= 40 && @version.matches?(/\A[a-zA-Z0-9.+_-]{1,80}\z/) && @max_pending > 0, "invalid_analytics_config")
       Fuel.check(@pseudonym_key.nil? || @pseudonym_key.not_nil!.bytesize >= 32, "invalid_server_keys")
-      Fuel.check(@context.to_json.bytesize <= 2048 && @context.raw.is_a?(Hash), "invalid_analytics_config")
+      Fuel.check(@context.to_json.bytesize <= 2048 && @context.raw.is_a?(Hash) && valid_strings?(@context), "invalid_analytics_config")
       Fuel.check(@playtest.nil? || @playtest.not_nil!.matches?(/\A[a-zA-Z0-9_-]{1,80}\z/), "invalid_analytics_config")
       Fuel.check(client_events.all? { |name| @events.has_key?(name) }, "invalid_analytics_config")
       @client_events = client_events.to_set
@@ -105,7 +105,21 @@ module Fuel
       allowed = @events[name]?
       Fuel.check(!allowed.nil? && properties.as_h.keys.all? { |k| allowed.not_nil!.includes?(k) }, "invalid_event")
       Fuel.check(properties.to_json.bytesize <= 2048 && properties.as_h.values.all? { |v| v.raw.is_a?(String) || v.raw.is_a?(Bool) || v.raw.is_a?(Int64) }, "invalid_event")
+      Fuel.check(valid_strings?(properties), "invalid_event")
       Fuel.check(@validate.call(name.dup, JSON.parse(properties.to_json)), "invalid_event")
+    end
+
+    private def valid_strings?(value : JSON::Any) : Bool
+      case raw = value.raw
+      when String
+        !raw.includes?('\0')
+      when Hash
+        raw.all? { |key, child| !key.includes?('\0') && valid_strings?(child) }
+      when Array
+        raw.all? { |child| valid_strings?(child) }
+      else
+        true
+      end
     end
 
     private def admit_pending

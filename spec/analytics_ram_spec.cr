@@ -30,6 +30,64 @@ end
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "RAM-only analytics" do
+    it "rejects NUL-bearing client properties while healthy events still reach transport" do
+      store = Fuel::Store.new(url, "ram_nul_value_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      actor = store.bootstrap(proof, "test")
+      sent = [] of JSON::Any
+      sink = Fuel::Questmetry.new(store, {"view" => ["kind"]}, "test", "1.0", client_events: ["view"]) do |body|
+        sent.concat(JSON.parse(body)["events"].as_a)
+        202
+      end
+      begin
+        sink.capture(proof, "healthy", "view", "", Fuel.json({kind: "literal \\u0000"})).should eq("queued")
+        expect_raises(Fuel::Error, "invalid_event") do
+          sink.capture_client(proof, "bad_client", "view", "", Fuel.json({kind: "bad\0value"}), 0_i64)
+        end
+        sink.emit(actor, "bad_server", "view", "", Fuel.json({kind: "bad\0value"}), revision: 0_i64)
+        deadline = Time.instant + 3.seconds
+        while sink.pending > 0 && Time.instant < deadline
+          sink.drain
+          sleep 1.millisecond
+        end
+        sink.pending.should eq(0)
+        sent.map { |event| event["event_id"].as_s }.should eq(["healthy"])
+      ensure
+        store.close
+      end
+    end
+
+    it "rejects NUL in an allowlisted property key" do
+      store = Fuel::Store.new(url, "ram_nul_key_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      store.bootstrap(proof, "test")
+      sink = Fuel::Questmetry.new(store, {"view" => ["bad\0key"]}, "test", "1.0") { |_| 202 }
+      begin
+        expect_raises(Fuel::Error, "invalid_event") do
+          sink.capture(proof, "bad_key", "view", "", Fuel.json({"bad\0key" => "value"}))
+        end
+        sink.pending.should eq(0)
+      ensure
+        store.close
+      end
+    end
+
+    it "rejects NUL recursively in context without rejecting literal escapes or JSON null" do
+      store = Fuel::Store.new(url, "ram_nul_context_#{Fuel.id}", "d" * 32, "p" * 32)
+      begin
+        Fuel::Questmetry.new(store, {"view" => [] of String}, "test", "1.0", context: Fuel.json({literal: "\\u0000", absent: nil})) { |_| 202 }
+        [Fuel.json({kind: "bad\0value"}), Fuel.json({"bad\0key" => "value"}), Fuel.json({nested: [{kind: "bad\0value"}]})].each do |context|
+          expect_raises(Fuel::Error, "invalid_analytics_config") do
+            Fuel::Questmetry.new(store, {"view" => [] of String}, "test", "1.0", context: context) { |_| 202 }
+          end
+        end
+      ensure
+        store.close
+      end
+    end
+
     it "drops an invalid trusted wire ID without sending it beside healthy events" do
       store = Fuel::Store.new(url, "ram_wire_id_#{Fuel.id}", "d" * 32, "p" * 32)
       store.migrate
