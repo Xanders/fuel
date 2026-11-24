@@ -31,7 +31,7 @@ Game code receives cloned JSON so failed rule validation cannot partially mutate
 
 ## Resource limits
 
-Games with long-running rooms can set `Sessions.new(rules, ttl: nil)` to disable the absolute room age limit. Idle cleanup and capacity limits still apply, and restart still loses all active sessions.
+Games can configure absolute room and invite age independently with `ttl` and `invite_ttl`. Passing nil disables the corresponding age check. An invite remains an admission capability while its room is joinable. Idle cleanup and capacity limits still apply, and restart still loses all active sessions.
 
 Persistent operations use sorted participant row locks, then binding revalidation, exact receipt lookup and pure domain execution. An exact retry returns before refreshing/applying game state. Progress, scores, notifications and the original receipt share one transaction. After successful commit, optional analytical copies are offered to the RAM sender without waiting for analytics admission or delivery. They are not part of the business commit and exact receipt retries do not regenerate them. A public action cannot select the server-only effect domain. AccountTransaction copies its descriptors and rejects undeclared business accounts; invalid/excess telemetry descriptors are dropped. Terminal receipt summaries remain readable after subsequent ordinary operations.
 

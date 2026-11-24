@@ -72,7 +72,11 @@ A durable operation contains `operation_id,cursor,source,session_id,epoch,action
 
 ## Recovery and authority
 
-`Sessions.new(rules, ttl: nil)` removes the absolute room age limit for long-running games. By default, `ttl: 6.hours` expires even an active room once it reaches that age, subject to pending business work. Idle departure, empty settled room cleanup, room capacity and independent invite and ticket expiry still apply with `ttl: nil`.
+`Sessions.new(rules, ttl: nil, invite_ttl: nil)` disables the absolute age limits for rooms and their invite codes. Defaults remain six hours for a room and five minutes for its invite, measured from room creation. Both options apply to the whole registry. A finite room TTL can expire an active room, subject to pending business work. Room disposal, capacity, admission checks, match tickets and account-transfer codes keep their own rules. An invite never outlives its room.
+
+The optional server-side `Rules.apply(state, actor, action, presence, events)` and `Rules.tick(state, dt, presence, events)` overloads receive a `SessionPresence` snapshot. It provides copied `members` and `connected` lists, `connected?(actor)`, and the opaque socket `generation(actor)` or nil. Existing rules overloads still work. Presence reflects server socket bindings at the time of the action or tick. HTTP-only members have no socket generation.
+
+`Rules.retain_idle_member?(state, actor, presence) : Bool` defaults to false. Idle cleanup calls this pure, nonblocking predicate with cloned state for an expired offline member while another socket remains connected. Returning true keeps the seat without updating activity. The next pass reevaluates the decision. A fully offline room follows normal cleanup. This hook cannot override explicit leave, deletion, room age limits or capacity.
 
 Custom trusted identity services can configure a transactional `login_authorizer`
 and pass optional `step_up` proof to `Store#redeem_login` before new-device
