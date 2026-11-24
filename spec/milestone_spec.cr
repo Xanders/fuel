@@ -11,7 +11,7 @@ class MilestoneRules < Fuel::Rules
   end
 
   def apply(state : JSON::Any, actor : String, action : JSON::Any, events : Fuel::SessionEvents) : JSON::Any
-    events.once(actor, action["event"].as_s, Fuel.json({mode: "duel"}), action["key"]?.try(&.as_s) || "")
+    events.once(action["subject"]?.try(&.as_s) || actor, action["event"].as_s, Fuel.json({mode: "duel"}), action["key"]?.try(&.as_s) || "")
     apply(state, actor, action)
   end
 
@@ -25,6 +25,13 @@ class MilestoneResultRules < MilestoneRules
     if state["value"].as_i64 > 0
       Fuel::GameResult.new("milestone", 1_i64, "Player", Fuel.json({completed: true}))
     end
+  end
+end
+
+class MilestoneLeaveRules < MilestoneRules
+  def leave(state : JSON::Any, actor : String, events : Fuel::SessionEvents) : JSON::Any
+    events.once(actor, "session_left", JSON.parse("{}"))
+    state
   end
 end
 
@@ -88,10 +95,79 @@ describe "best-effort room milestones" do
     room.snapshot(actor)["state"]["value"].as_i64.should eq(2)
     room.drain_events.should be_empty
   end
+
+  it "drops an oversized milestone subject while accepting the gameplay command" do
+    actor = Fuel.id
+    room = Fuel::Room.new(MilestoneRules.new, actor, "solo", 1, false)
+    room.command(actor, room.epoch, "large-subject", 0_i64,
+      Fuel.json({event: "run_started", subject: "a" * 10_000}))
+    room.snapshot(actor)["state"]["value"].as_i64.should eq(1)
+    room.drain_events.should be_empty
+  end
 end
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "milestones independent of analytics delivery" do
+    it "keeps the result consent revision from creation across a later room preference refresh" do
+      store = Fuel::Store.new(url, "result_consent_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      credential = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      actor = store.bootstrap(credential, "test")
+      revision = store.analytics_enabled(credential, false)
+      bodies = [] of String
+      analytics = Fuel::Questmetry.new(store, {"session_finished" => [] of String}, "test", "0.3.14") { |body| bodies << body; 202 }
+      room = Fuel::Room.new(MilestoneResultRules.new, actor, "solo", 1, false, preferences: {actor => revision})
+      begin
+        room.command(actor, room.epoch, "finish", 0_i64, Fuel.json({event: "run_started"}))
+        room.preference(actor, store.analytics_enabled(credential, true))
+        room.persist_result(store, credential, analytics)
+        deadline = Time.instant + 3.seconds
+        until analytics.pending == 0
+          fail "result analytics admission did not settle" if Time.instant >= deadline
+          sleep 1.millisecond
+        end
+        analytics.drain
+        bodies.should be_empty
+        store.progress(credential)["completed"].as_bool.should be_true
+        room.pending_result?.should be_false
+      ensure
+        store.close
+      end
+    end
+
+    it "delivers a final leave fact after cleanup or immediate room replacement" do
+      [false, true].each do |cleanup|
+        store = Fuel::Store.new(url, "leave_handoff_#{Fuel.id}", "d" * 32, "p" * 32)
+        store.migrate
+        credential = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+        actor = store.bootstrap(credential, "test")
+        bodies = [] of JSON::Any
+        analytics = Fuel::Questmetry.new(store, {"session_left" => [] of String}, "test", "0.3.14") { |body| bodies.concat(JSON.parse(body)["events"].as_a); 202 }
+        sessions = Fuel::Sessions.new(MilestoneLeaveRules.new, max_rooms: 1)
+        room = sessions.create(actor, "solo", 1, preferences: {actor => 0_i64})
+        rules = WalletRules.new
+        handler = Fuel::Handler.new(store, sessions, [] of String, analytics, account_rules: rules)
+        runtime = Fuel::Runtime.new(store, sessions, handler, rules, analytics)
+        begin
+          room.leave(actor)
+          sessions.cleanup if cleanup
+          sessions.create(actor, "solo", 1, preferences: {actor => 0_i64})
+          runtime.pump_analytics
+          deadline = Time.instant + 3.seconds
+          until bodies.size == 1
+            fail "final leave fact was lost on room disposal" if Time.instant >= deadline
+            analytics.drain
+            sleep 1.millisecond
+          end
+          bodies.first["name"].as_s.should eq("session_left")
+          store.db.query_one("SELECT count(*) FROM fuel_operations WHERE ns=$1", store.namespace, as: Int64).should eq(0)
+        ensure
+          runtime.stop
+          store.close
+        end
+      end
+    end
+
     it "keeps results and progress committed when analytics validation fails" do
       store = Fuel::Store.new(url, "milestone_result_#{Fuel.id}", "d" * 32, "p" * 32)
       store.migrate
@@ -100,7 +176,7 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
       rejected = Channel(Nil).new(1)
       analytics = Fuel::Questmetry.new(store, {"session_finished" => [] of String}, "test", "0.3.14",
         validate: ->(name : String, properties : JSON::Any) { rejected.send(nil); false }) { |_| 503 }
-      room = Fuel::Room.new(MilestoneResultRules.new, actor, "solo", 1, false)
+      room = Fuel::Room.new(MilestoneResultRules.new, actor, "solo", 1, false, preferences: {actor => 0_i64})
       begin
         room.command(actor, room.epoch, "finish", 0_i64, Fuel.json({event: "run_started"}))
         room.persist_result(store, credential, analytics)
@@ -120,7 +196,7 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
           fail "analytics admission did not settle" if Time.instant >= deadline
           sleep 1.millisecond
         end
-        recovered = Fuel::Room.new(MilestoneResultRules.new, actor, "solo", 1, false)
+        recovered = Fuel::Room.new(MilestoneResultRules.new, actor, "solo", 1, false, preferences: {actor => 0_i64})
         recovered.command(actor, recovered.epoch, "finish", 0_i64, Fuel.json({event: "run_started"}))
         store.record_result(credential, recovered.id, "milestone", 1_i64, "Player", Fuel.json({completed: true}))
         recovered.persist_result(store, credential, analytics)

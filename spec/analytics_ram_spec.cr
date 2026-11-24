@@ -8,6 +8,26 @@ class RamEventWallet < WalletRules
   end
 end
 
+class RamPublicWallet < RamEventWallet
+  def public_action?(name : String) : Bool
+    name == "grant"
+  end
+end
+
+def ram_wait(channel : Channel(Nil), label : String)
+  select
+  when channel.receive
+  when timeout(3.seconds) then fail label
+  end
+end
+
+def ram_release(channel : Channel(Nil))
+  select
+  when channel.send(nil)
+  else
+  end
+end
+
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "RAM-only analytics" do
     it "never stores accepted payloads or replays them through a restarted adapter" do
@@ -71,7 +91,7 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
       rejected = Channel(Nil).new(1)
       sink = Fuel::Questmetry.new(store, {"reward_banked" => ["mode"]}, "test", "1.0",
         validate: ->(name : String, props : JSON::Any) { rejected.send(nil); false }) { |_| 503 }
-      effect = Fuel::Effect.new("grant", actor, "grant", JSON.parse("{}"), Time.utc.to_unix)
+      effect = Fuel::Effect.new("grant", actor, "grant", JSON.parse("{}"), Time.utc.to_unix, preferences: {actor => 0_i64})
       store.apply_effect(effect, RamEventWallet.new, sink)
       select
       when rejected.receive
@@ -88,37 +108,41 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
       store.migrate
       proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
       actor = store.bootstrap(proof, "test")
-      started, release, finished = Channel(Nil).new, Channel(Nil).new, Channel(Nil).new(1)
+      started, release, finished = Channel(Nil).new(1), Channel(Nil).new(1), Channel(Nil).new(1)
       opted_out, committed = Channel(Nil).new(1), Channel(Nil).new(1)
       sink = Fuel::Questmetry.new(store, {"view" => [] of String}, "test", "1.0") do |_|
         started.send(nil)
         release.receive
         202
       end
-      sink.capture(proof, "one", "view", "", JSON.parse("{}"))
-      spawn { sink.drain; finished.send(nil) }
-      started.receive
-      spawn { sink.enabled(proof, false); opted_out.send(nil) }
-      optout_fast = select
-      when opted_out.receive then true
-      when timeout(2.seconds) then false
+      begin
+        sink.capture(proof, "one", "view", "", JSON.parse("{}"))
+        spawn { sink.drain; finished.send(nil) }
+        ram_wait(started, "delivery did not start")
+        spawn { sink.enabled(proof, false); opted_out.send(nil) }
+        optout_fast = select
+        when opted_out.receive then true
+        when timeout(2.seconds) then false
+        end
+        spawn do
+          store.apply_effect(Fuel::Effect.new("grant", actor, "grant", JSON.parse("{}"), Time.utc.to_unix), WalletRules.new, sink)
+          committed.send(nil)
+        end
+        commit_fast = select
+        when committed.receive then true
+        when timeout(2.seconds) then false
+        end
+        release.send(nil)
+        ram_wait(finished, "delivery did not finish")
+        ram_wait(opted_out, "opt-out did not finish") unless optout_fast
+        ram_wait(committed, "business commit did not finish") unless commit_fast
+        optout_fast.should be_true
+        commit_fast.should be_true
+        store.account(proof, WalletRules.new)["progress"]["coins"].as_i64.should eq(130)
+      ensure
+        ram_release(release)
+        store.close
       end
-      spawn do
-        store.apply_effect(Fuel::Effect.new("grant", actor, "grant", JSON.parse("{}"), Time.utc.to_unix), WalletRules.new, sink)
-        committed.send(nil)
-      end
-      commit_fast = select
-      when committed.receive then true
-      when timeout(2.seconds) then false
-      end
-      release.send(nil)
-      finished.receive
-      opted_out.receive unless optout_fast
-      committed.receive unless commit_fast
-      optout_fast.should be_true
-      commit_fast.should be_true
-      store.account(proof, WalletRules.new)["progress"]["coins"].as_i64.should eq(130)
-      store.close
     end
 
     it "bounds async admissions and batch work without blocking a business caller" do
@@ -126,7 +150,7 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
       store.migrate
       proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
       actor = store.bootstrap(proof, "test")
-      started, release = Channel(Nil).new, Channel(Nil).new
+      started, release = Channel(Nil).new(1), Channel(Nil).new(1)
       validations, delivered = 0, 0
       sink = Fuel::Questmetry.new(store, {"view" => [] of String}, "test", "1.0", max_pending: 2,
         validate: ->(name : String, props : JSON::Any) {
@@ -137,22 +161,31 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
           end
           true
         }) { |body| delivered += JSON.parse(body)["events"].as_a.size; 202 }
-      sink.emit(actor, "one", "view", "", JSON.parse("{}"))
-      started.receive
-      sink.emit(actor, "two", "view", "", JSON.parse("{}"))
-      sink.emit(actor, "three", "view", "", JSON.parse("{}"))
-      sink.pending.should eq(2)
-      sink.omitted.should eq(1)
-      store.apply_effect(Fuel::Effect.new("grant", actor, "grant", JSON.parse("{}"), Time.utc.to_unix), WalletRules.new)
-      release.send(nil)
-      deadline = Time.instant + 2.seconds
-      while sink.pending > 0 && Time.instant < deadline
-        sink.drain
-        sleep 1.millisecond
+      begin
+        sink.emit(actor, "one", "view", "", JSON.parse("{}"), revision: 0_i64)
+        ram_wait(started, "deferred admission did not start")
+        sink.emit(actor, "two", "view", "", JSON.parse("{}"), revision: 0_i64)
+        sink.emit(actor, "three", "view", "", JSON.parse("{}"), revision: 0_i64)
+        sink.pending.should eq(2)
+        sink.omitted.should eq(1)
+        business = Channel(Nil).new(1)
+        spawn do
+          store.apply_effect(Fuel::Effect.new("grant", actor, "grant", JSON.parse("{}"), Time.utc.to_unix), WalletRules.new)
+          business.send(nil)
+        end
+        ram_wait(business, "business commit waited for the validator")
+        release.send(nil)
+        deadline = Time.instant + 2.seconds
+        while sink.pending > 0 && Time.instant < deadline
+          sink.drain
+          sleep 1.millisecond
+        end
+        sink.pending.should eq(0)
+        delivered.should eq(2)
+      ensure
+        ram_release(release)
+        store.close
       end
-      sink.pending.should eq(0)
-      delivered.should eq(2)
-      store.close
     end
 
     it "limits each delivery batch to25 even when more events are ready" do
@@ -168,6 +201,76 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
       sink.pending.should eq(1)
       sink.drain
       sizes.should eq([25, 1])
+      store.close
+    end
+
+    it "freezes public action consent so disabled-interval facts cannot return after opt-in" do
+      store = Fuel::Store.new(url, "ram_public_revision_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      store.bootstrap(proof, "test")
+      store.analytics_enabled(proof, false)
+      started, release = Channel(Nil).new(1), Channel(Nil).new(1)
+      delivered = 0
+      sink = Fuel::Questmetry.new(store, {"reward_banked" => ["mode"]}, "test", "1.0",
+        validate: ->(name : String, props : JSON::Any) { started.send(nil); release.receive; true }) { |_| delivered += 1; 202 }
+      begin
+        business = Channel(Nil).new(1)
+        spawn do
+          store.execute(proof, "grant", "grant", JSON.parse("{}"), RamPublicWallet.new, sink)
+          business.send(nil)
+        end
+        ram_wait(business, "business commit waited for analytics admission")
+        ram_wait(started, "server fact admission did not start")
+        store.analytics_enabled(proof, true)
+        release.send(nil)
+        deadline = Time.instant + 3.seconds
+        while sink.pending > 0 && Time.instant < deadline
+          sink.drain
+          sleep 1.millisecond
+        end
+        sink.pending.should eq(0)
+        delivered.should eq(0)
+        store.account(proof, WalletRules.new)["progress"]["coins"].as_i64.should eq(130)
+      ensure
+        ram_release(release)
+        store.close
+      end
+    end
+
+    it "does not reopen a closed Store after a deferred validator resumes" do
+      store = Fuel::Store.new(url, "ram_closed_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      actor = store.bootstrap(proof, "test")
+      started, release = Channel(Nil).new(1), Channel(Nil).new(1)
+      sink = Fuel::Questmetry.new(store, {"view" => [] of String}, "test", "1.0",
+        validate: ->(name : String, props : JSON::Any) { started.send(nil); release.receive; true }) { |_| 202 }
+      begin
+        sink.emit(actor, "one", "view", "", JSON.parse("{}"), revision: 0_i64)
+        ram_wait(started, "deferred validator did not start")
+        store.close
+        release.send(nil)
+        deadline = Time.instant + 3.seconds
+        while sink.pending > 0 && Time.instant < deadline
+          sleep 1.millisecond
+        end
+        store.db.pool.stats.open_connections.should eq(0)
+        sink.pending.should eq(0)
+      ensure
+        ram_release(release)
+        store.close
+      end
+    end
+
+    it "drops server offers with an unknown consent snapshot" do
+      store = Fuel::Store.new(url, "ram_unknown_revision_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      actor = store.bootstrap(proof, "test")
+      sink = Fuel::Questmetry.new(store, {"view" => [] of String}, "test", "1.0") { |_| 202 }
+      sink.emit(actor, "one", "view", "", JSON.parse("{}"))
+      sink.pending.should eq(0)
       store.close
     end
   end

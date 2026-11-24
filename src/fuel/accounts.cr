@@ -235,9 +235,12 @@ module Fuel
         owner = actor || identify(c, credential.not_nil!)
         participants = ([owner] + rules.participants(owner, action, JSON.parse(payload.to_json))).uniq.sort
         Fuel.check(participants.size <= 16, "too_many_participants")
+        current_preferences = {} of String => Int64
         participants.each do |account|
           Fuel.key(account)
-          c.query_one?("SELECT id FROM fuel_accounts WHERE ns=$1 AND id=$2 FOR UPDATE", @namespace, account, as: String)
+          if revision = c.query_one?("SELECT analytics_revision FROM fuel_accounts WHERE ns=$1 AND id=$2 FOR UPDATE", @namespace, account, as: Int64)
+            current_preferences[account] = revision
+          end
         end
         Fuel.check(!c.query_one?("SELECT id FROM fuel_accounts WHERE ns=$1 AND id=$2", @namespace, owner, as: String).nil?, "account_missing")
         Fuel.check(verify(c, credential) == owner, "unauthorized") if credential
@@ -280,7 +283,9 @@ module Fuel
         end
         if analytics
           domain.events.each_with_index do |(account, name, journey, properties, occurrence), index|
-            events << {account, Digest::SHA256.hexdigest({owner, id, index}.to_json), name, journey, properties, occurrence, preferences[account]?}
+            revision = (credential ? current_preferences : preferences)[account]?
+            next unless revision
+            events << {account, Digest::SHA256.hexdigest({owner, id, index}.to_json), name, journey, properties, occurrence, revision}
           end
         end
         result

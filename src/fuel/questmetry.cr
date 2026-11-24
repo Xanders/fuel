@@ -67,6 +67,7 @@ module Fuel
 
     # Call after business commit; one bounded background worker admits server facts.
     def emit(account : String, id : String, name : String, session : String, properties : JSON::Any, occurred_at : Time = Time.utc, revision : Int64? = nil) : Nil
+      return if revision.nil? || revision < 0
       Fuel.key(account)
       Fuel.key(id)
       Fuel.key(name)
@@ -108,10 +109,12 @@ module Fuel
         end
         accepted = false
         begin
-          validate(submission.id, submission.name, submission.session, submission.properties)
-          @store.db.transaction do |tx|
-            accepted = admit(tx.connection, submission.account, submission.id, submission.name, submission.session,
-              submission.properties, submission.occurred_at, submission.revision, reserved: true) == "queued"
+          unless @store.closed?
+            validate(submission.id, submission.name, submission.session, submission.properties)
+            @store.with_analytics_admission do |connection|
+              accepted = admit(connection, submission.account, submission.id, submission.name, submission.session,
+                submission.properties, submission.occurred_at, submission.revision, reserved: true) == "queued"
+            end
           end
         rescue
           # Failed admission is dropped; no durable journal or replay exists.

@@ -100,6 +100,7 @@ module Fuel
     @sequences = {} of String => Int64
     @ready = Set(String).new
     @results = {} of String => GameResult
+    @result_revisions = {} of String => Int64
     @settled = Set(String).new
     @ended = false
     @started = false
@@ -186,6 +187,7 @@ module Fuel
       @receipt_log.delete(actor)
       @analytics_revisions.delete(actor)
       @results.delete(actor)
+      @result_revisions.delete(actor)
       @settled.delete(actor)
       @ended = true if @members.empty?
       changed(force: true)
@@ -392,9 +394,9 @@ module Fuel
     def persist_result(store : Store, credential : Credential, analytics : Questmetry? = nil)
       return if @mutex.synchronize { @results.empty? }
       actor = store.authenticate(credential)
-      result = @mutex.synchronize do
+      result, revision = @mutex.synchronize do
         authorize(actor, refresh_activity: false)
-        @settled.includes?(actor) ? nil : @results[actor]?
+        {@settled.includes?(actor) ? nil : @results[actor]?, @result_revisions[actor]?}
       end
       return unless result
       newly_committed = false
@@ -402,7 +404,9 @@ module Fuel
         newly_committed = true
       end
       @mutex.synchronize { @settled.add(actor) }
-      analytics.try(&.emit(actor, @id + actor, "session_finished", @id, JSON.parse("{}"))) if newly_committed
+      if newly_committed && revision
+        analytics.try(&.emit(actor, @id + actor, "session_finished", @id, JSON.parse("{}"), revision: revision))
+      end
     end
 
     def drain_events(limit = 25) : Array(SessionEvent)
@@ -414,6 +418,9 @@ module Fuel
         next if @results.has_key?(actor)
         if result = @rules.result(JSON.parse(@state.to_json), actor)
           @results[actor] = result
+          if revision = @analytics_revisions[actor]?
+            @result_revisions[actor] = revision
+          end
         end
       end
     end
@@ -501,6 +508,7 @@ module Fuel
     @cancelled = {} of Tuple(String, String, String) => Time::Instant
     @matched = {} of Tuple(String, String, String) => MatchOutcome
     @playing = {} of String => String
+    @retired_events = [] of Tuple(String, SessionEvent)
     @mutex = Mutex.new
 
     def initialize(@rules : Rules, @max_rooms = 1000, @max_tickets = 2000, @ttl = 6.hours, @ticket_ttl = 5.minutes, @modes = {} of String => ModePolicy, @idle_timeout = 30.seconds)
@@ -620,7 +628,7 @@ module Fuel
             members.each { |actor| check_exclusive(actor, mode, room.id) }
             room.join(members, profiles, preferences)
           rescue error
-            @rooms.delete(room.id)
+            remove_room_unlocked(room.id, retain_events: false)
             raise error
           end
           result = Fuel.json({status: "matched", session_id: room.id})
@@ -681,7 +689,7 @@ module Fuel
         @cancelled.reject! { |_, created| Time.instant - created >= @ticket_ttl }
         @matched.reject! { |_, outcome| Time.instant - outcome.created_at >= @ticket_ttl }
         expired = @rooms.select { |_, r| r.disposable? || Time.instant - r.created_at >= @ttl && !r.pending_result? }.keys
-        expired.each { |id| @rooms.delete(id) }
+        expired.each { |id| remove_room_unlocked(id) }
         @tickets.keys.each do |key|
           next unless @tickets.has_key?(key)
           if Time.instant - @ticket_created[key] >= @ticket_ttl
@@ -722,6 +730,10 @@ module Fuel
       rooms.each { |room| room.preference(actor, revision) }
     end
 
+    def drain_events(limit = 25) : Array(Tuple(String, SessionEvent))
+      @mutex.synchronize { @retired_events.shift(Math.min(Math.max(limit, 0), @retired_events.size)) }
+    end
+
     def active?(room : Room) : Bool
       !@modes[room.mode]?.try(&.shared) && !room.finished? && !room.members.empty?
     end
@@ -741,7 +753,7 @@ module Fuel
           return join_unlocked(actor, existing, progress, preferences)
         end
       end
-      @rooms.reject! { |_, room| room.disposable? }
+      @rooms.select { |_, room| room.disposable? }.keys.each { |id| remove_room_unlocked(id) }
       Fuel.check(@rooms.size < @max_rooms, "capacity")
       check_exclusive(actor, mode)
       check_admission(actor)
@@ -757,6 +769,17 @@ module Fuel
     private def check_admission(actor : String)
       Fuel.check(@rooms.values.none?(&.pending_for?(actor)), "pending_result")
       Fuel.check(can_admit?(actor), "capacity")
+    end
+
+    private def remove_room_unlocked(id : String, retain_events = true)
+      if room = @rooms.delete(id)
+        if retain_events
+          room.drain_events(256).each do |fact|
+            break if @retired_events.size >= 256
+            @retired_events << {room.id, fact}
+          end
+        end
+      end
     end
 
     private def can_admit?(actor : String) : Bool

@@ -23,16 +23,43 @@ module Fuel
   class Store
     getter db : DB::Database
     getter namespace : String
+    @closed = false
+    @lifecycle = Mutex.new
 
     def initialize(url : String, @namespace : String, @device_key : String, @pair_key : String, @previous_device_keys = [] of String, @max_accounts = 1000000, @login_authorizer : LoginAuthorizer? = nil)
       Fuel.check(url.starts_with?("postgres://") || url.starts_with?("postgresql://"), "postgres_required")
       Fuel.key(namespace)
       Fuel.check(device_key.bytesize >= 32 && pair_key.bytesize >= 32 && device_key != pair_key, "invalid_server_keys")
       @db = DB.open(url)
+      @db.setup_connection do |connection|
+        if closed?
+          connection.close
+          raise Error.new("store_closed")
+        end
+      end
     end
 
     def close
+      @lifecycle.synchronize { @closed = true }
       @db.close
+    end
+
+    def closed? : Bool
+      @lifecycle.synchronize { @closed }
+    end
+
+    # A late detached admission must not reopen the driver's reusable pool.
+    def with_analytics_admission(&) : Nil
+      return if closed?
+      connection = @db.checkout
+      begin
+        return if closed?
+        connection.transaction { |tx| yield tx.connection }
+      ensure
+        connection.close if closed?
+        connection.release
+      end
+      nil
     end
 
     def migrate

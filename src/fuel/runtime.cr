@@ -144,21 +144,24 @@ module Fuel
       spawn do
         begin
           rooms = @sessions.rooms
-          budget = 25
-          unless rooms.empty?
+          facts = @sessions.drain_events(25)
+          budget = 25 - facts.size
+          if !rooms.empty? && budget > 0
             first = @analytics_cursor % rooms.size
             rooms.size.times do |offset|
               index = (first + offset) % rooms.size
               room = rooms[index]
-              facts = room.drain_events(budget)
+              room_facts = room.drain_events(budget)
               @analytics_cursor = index + 1
-              if sink = @analytics
-                facts.each do |fact|
-                  sink.emit(fact.actor, fact.id, fact.name, room.id, fact.properties, Time.unix(fact.occurred_at), fact.revision)
-                end
-              end
-              budget -= facts.size
+              room_facts.each { |fact| facts << {room.id, fact} }
+              budget -= room_facts.size
               break if budget == 0
+            end
+          end
+          if sink = @analytics
+            facts.each do |session_id, fact|
+              next unless fact.revision
+              sink.emit(fact.actor, fact.id, fact.name, session_id, fact.properties, Time.unix(fact.occurred_at), fact.revision)
             end
           end
           @analytics.try(&.drain)

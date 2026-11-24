@@ -11,6 +11,7 @@ module Fuel
     end
 
     def once(actor : String, name : String, properties : JSON::Any, discriminator : String = "")
+      Fuel.key(actor)
       Fuel.key(name)
       return if @facts.size >= 256 || properties.to_json.bytesize > 2048 || discriminator.bytesize > 100
       id = Digest::SHA256.hexdigest({actor, name, discriminator}.to_json)
