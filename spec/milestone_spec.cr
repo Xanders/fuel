@@ -60,6 +60,14 @@ class InvalidMetricWalletRules < WalletRules
   end
 end
 
+class MilestoneEventWalletRules < WalletRules
+  def apply(tx : Fuel::AccountTransaction, actor : String, action : String, payload : JSON::Any, now : Int64) : JSON::Any
+    reply = super
+    tx.event(actor, "reward_banked", "", JSON.parse("{}"), now)
+    reply
+  end
+end
+
 describe "invalid telemetry JSON isolation" do
   it "keeps a room command successful and drops its non-finite analytics metric" do
     actor = Fuel.id
@@ -218,6 +226,87 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
   end
 
   describe "milestones independent of analytics delivery" do
+    [false, true].each do |retired|
+      it "keeps #{retired ? "retired" : "live"} milestone envelopes opaque for two opted-in accounts" do
+        store = Fuel::Store.new(url, "milestone_privacy_#{Fuel.id}", "d" * 32, "p" * 32)
+        store.migrate
+        credentials = Array.new(2) { Fuel::Credential.new(Fuel.id, Random::Secure.hex(32)) }
+        actors = credentials.map { |credential| store.bootstrap(credential, "test") }
+        preferences = actors.to_h { |actor| {actor, 0_i64} }
+        bodies = [] of String
+        name = retired ? "session_left" : "run_started"
+        analytics = Fuel::Questmetry.new(store, {name => ["mode"]}, "test", "0.3.14") { |body| bodies << body; 202 }
+        sessions = Fuel::Sessions.new(MilestoneLeaveRules.new)
+        room = sessions.create(actors.first, "duel", 2, preferences: preferences)
+        room.join([actors.last], preferences: preferences)
+        rules = WalletRules.new
+        handler = Fuel::Handler.new(store, sessions, [] of String, analytics, account_rules: rules)
+        runtime = Fuel::Runtime.new(store, sessions, handler, rules, analytics)
+        begin
+          actors.each do |actor|
+            if retired
+              room.leave(actor)
+            else
+              revision = room.snapshot(actor)["revision"].as_s.to_i64
+              action = Fuel.json({event: name})
+              room.command(actor, room.epoch, "start", revision, action)
+              room.command(actor, room.epoch, "start", revision, action)
+            end
+          end
+          sessions.cleanup if retired
+          sessions.rooms.should be_empty if retired
+          runtime.pump_analytics
+          deadline = Time.instant + 3.seconds
+          events = [] of JSON::Any
+          until events.size == 2
+            fail "milestone events were not delivered" if Time.instant >= deadline
+            analytics.drain
+            events = bodies.flat_map { |body| JSON.parse(body)["events"].as_a }
+            sleep 1.millisecond
+          end
+          bodies.each do |body|
+            ([room.epoch, room.id] + actors).each { |raw| body.includes?(raw).should be_false }
+          end
+          events.map { |event| event["event_id"].as_s }.uniq.size.should eq(2)
+          events.all? { |event| event["name"].as_s == name && event["source"].as_s == "server" }.should be_true
+          analytics.drain
+          bodies.flat_map { |body| JSON.parse(body)["events"].as_a }.size.should eq(2)
+        ensure
+          runtime.stop
+          store.close
+        end
+      end
+    end
+
+    it "keeps framework operation event IDs opaque instead of using the predictable legacy hash" do
+      store = Fuel::Store.new(url, "operation_event_privacy_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      credential = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      actor = store.bootstrap(credential, "test")
+      bodies = [] of String
+      analytics = Fuel::Questmetry.new(store, {"reward_banked" => [] of String}, "test", "0.3.14") { |body| bodies << body; 202 }
+      operation = Fuel.id
+      effect = Fuel::Effect.new(operation, actor, "grant", JSON.parse("{}"), Time.utc.to_unix, preferences: {actor => 0_i64})
+      begin
+        store.apply_effect(effect, MilestoneEventWalletRules.new, analytics)
+        deadline = Time.instant + 3.seconds
+        until bodies.size == 1
+          fail "framework operation event was not delivered" if Time.instant >= deadline
+          analytics.drain
+          sleep 1.millisecond
+        end
+        event = JSON.parse(bodies.first)["events"].as_a.first
+        event["event_id"].as_s.should_not eq(Digest::SHA256.hexdigest({actor, operation, 0}.to_json))
+        store.apply_effect(effect, MilestoneEventWalletRules.new, analytics)
+        analytics.pending.should eq(0)
+        analytics.drain
+        bodies.size.should eq(1)
+        store.progress(credential)["coins"].as_i64.should eq(130)
+      ensure
+        store.close
+      end
+    end
+
     it "delivers an opaque built-in result event without raw room or account identifiers" do
       store = Fuel::Store.new(url, "result_event_privacy_#{Fuel.id}", "d" * 32, "p" * 32)
       store.migrate

@@ -161,7 +161,7 @@ module Fuel
           if sink = @analytics
             facts.each do |session_id, fact|
               next unless fact.revision
-              sink.emit(fact.actor, fact.id, fact.name, session_id, fact.properties, Time.unix(fact.occurred_at), fact.revision)
+              sink.emit(fact.actor, @store.digest("analytics-milestone-id", fact.id), fact.name, session_id, fact.properties, Time.unix(fact.occurred_at), fact.revision)
             end
           end
           @analytics.try(&.drain)

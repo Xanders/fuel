@@ -297,7 +297,7 @@ module Fuel
       if sink = analytics
         events.each do |account, event_id, name, journey, properties, occurrence, revision|
           begin
-            sink.emit(account, event_id, name, journey, properties, Time.unix(occurrence), revision)
+            sink.emit(account, digest("analytics-operation-id", event_id), name, journey, properties, Time.unix(occurrence), revision)
           rescue
             # A malformed telemetry occurrence cannot change a committed receipt.
           end
