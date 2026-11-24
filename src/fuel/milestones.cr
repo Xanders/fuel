@@ -13,10 +13,12 @@ module Fuel
     def once(actor : String, name : String, properties : JSON::Any, discriminator : String = "")
       Fuel.key(actor)
       Fuel.key(name)
-      return if @facts.size >= 256 || properties.to_json.bytesize > 2048 || discriminator.bytesize > 100
+      return if @facts.size >= 256 || discriminator.bytesize > 100
+      encoded = properties.to_json
+      return if encoded.bytesize > 2048
       id = Digest::SHA256.hexdigest({actor, name, discriminator}.to_json)
-      @facts[id] ||= SessionEvent.new(id, actor, name, JSON.parse(properties.to_json), @occurred_at)
-    rescue Error
+      @facts[id] ||= SessionEvent.new(id, actor, name, JSON.parse(encoded), @occurred_at)
+    rescue Error | JSON::Error
       # Invalid telemetry never rejects the surrounding gameplay mutation.
       nil
     end

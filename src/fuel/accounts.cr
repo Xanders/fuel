@@ -76,8 +76,12 @@ module Fuel
     end
 
     def event(account : String, name : String, session : String, properties : JSON::Any, occurred_at : Int64)
-      return unless @states.has_key?(account) && @events.size < 16 && name.bytesize <= 100 && session.bytesize <= 200 && properties.to_json.bytesize <= 2048
-      @events << {account, name, session, JSON.parse(properties.to_json), occurred_at}
+      return unless @states.has_key?(account) && @events.size < 16 && name.bytesize <= 100 && session.bytesize <= 200
+      encoded = properties.to_json
+      return if encoded.bytesize > 2048
+      @events << {account, name, session, JSON.parse(encoded), occurred_at}
+    rescue JSON::Error
+      nil
     end
   end
 

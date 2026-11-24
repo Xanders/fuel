@@ -35,6 +35,50 @@ class MilestoneLeaveRules < MilestoneRules
   end
 end
 
+class InvalidMetricMilestoneRules < MilestoneRules
+  def initialize(@actor : String)
+  end
+
+  def apply(state : JSON::Any, actor : String, action : JSON::Any, events : Fuel::SessionEvents) : JSON::Any
+    events.once(actor, "metric", JSON::Any.new({"metric" => JSON::Any.new(Float64::NAN)}))
+    apply(state, actor, action)
+  end
+
+  def tick(state : JSON::Any, dt : Time::Span, events : Fuel::SessionEvents) : JSON::Any
+    events.once(@actor, "metric", JSON::Any.new({"metric" => JSON::Any.new(Float64::NAN)}))
+    state.as_h["value"] = JSON::Any.new(state["value"].as_i64 + 1_i64)
+    state
+  end
+end
+
+class InvalidMetricWalletRules < WalletRules
+  def apply(tx : Fuel::AccountTransaction, actor : String, action : String, payload : JSON::Any, now : Int64) : JSON::Any
+    reply = super
+    tx.event(actor, "metric", "", JSON::Any.new({"metric" => JSON::Any.new(Float64::NAN)}), now)
+    tx.events.should be_empty
+    reply
+  end
+end
+
+describe "invalid telemetry JSON isolation" do
+  it "keeps a room command successful and drops its non-finite analytics metric" do
+    actor = Fuel.id
+    room = Fuel::Room.new(InvalidMetricMilestoneRules.new(actor), actor, "solo", 1, false)
+    room.command(actor, room.epoch, "one", 0_i64, JSON.parse("{}"))
+    room.snapshot(actor)["state"]["value"].as_i64.should eq(1)
+    room.drain_events.should be_empty
+  end
+
+  it "keeps a room tick successful and drops its non-finite analytics metric" do
+    actor = Fuel.id
+    room = Fuel::Room.new(InvalidMetricMilestoneRules.new(actor), actor, "solo", 1, false)
+    room.ready(actor)
+    room.tick(50.milliseconds)
+    room.snapshot(actor)["state"]["value"].as_i64.should eq(1)
+    room.drain_events.should be_empty
+  end
+end
+
 describe "best-effort room milestones" do
   it "does not block valid commands or session departure when analytics is absent" do
     actor = Fuel.id
@@ -107,6 +151,24 @@ describe "best-effort room milestones" do
 end
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
+  describe "invalid telemetry JSON isolation" do
+    it "commits a reward, progress and its receipt despite a non-finite analytics metric" do
+      store = Fuel::Store.new(url, "invalid_metric_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      credential = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      actor = store.bootstrap(credential, "test")
+      begin
+        effect = Fuel::Effect.new("grant", actor, "grant", JSON.parse("{}"), Time.utc.to_unix)
+        receipt = store.apply_effect(effect, InvalidMetricWalletRules.new)
+        receipt["reply"]["coins"].as_i64.should eq(130)
+        store.progress(credential)["coins"].as_i64.should eq(130)
+        store.operation(credential, "grant")["reply"]["coins"].as_i64.should eq(130)
+      ensure
+        store.close
+      end
+    end
+  end
+
   describe "analytics Store lifetime" do
     it "closes an actual second admission connection while its SQL is blocked" do
       store = Fuel::Store.new(url, "analytics_owned_connection_#{Fuel.id}", "d" * 32, "p" * 32)
