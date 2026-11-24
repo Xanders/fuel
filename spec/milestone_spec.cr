@@ -218,6 +218,37 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
   end
 
   describe "milestones independent of analytics delivery" do
+    it "delivers an opaque built-in result event without raw room or account identifiers" do
+      store = Fuel::Store.new(url, "result_event_privacy_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      credential = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      actor = store.bootstrap(credential, "test")
+      bodies = [] of String
+      analytics = Fuel::Questmetry.new(store, {"session_finished" => [] of String}, "test", "0.3.14") { |body| bodies << body; 202 }
+      room = Fuel::Room.new(MilestoneResultRules.new, actor, "solo", 1, false, preferences: {actor => 0_i64})
+      begin
+        room.command(actor, room.epoch, "finish", 0_i64, Fuel.json({event: "run_started"}))
+        room.persist_result(store, credential, analytics)
+        deadline = Time.instant + 3.seconds
+        until bodies.size == 1
+          fail "built-in result event was not delivered" if Time.instant >= deadline
+          analytics.drain
+          sleep 1.millisecond
+        end
+        bodies.first.includes?(room.id).should be_false
+        bodies.first.includes?(actor).should be_false
+        event = JSON.parse(bodies.first)["events"].as_a.first
+        event["name"].as_s.should eq("session_finished")
+        event["source"].as_s.should eq("server")
+        room.persist_result(store, credential, analytics)
+        analytics.pending.should eq(0)
+        analytics.drain
+        bodies.size.should eq(1)
+      ensure
+        store.close
+      end
+    end
+
     it "keeps the result consent revision from creation across a later room preference refresh" do
       store = Fuel::Store.new(url, "result_consent_#{Fuel.id}", "d" * 32, "p" * 32)
       store.migrate

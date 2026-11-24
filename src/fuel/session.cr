@@ -405,7 +405,7 @@ module Fuel
       end
       @mutex.synchronize { @settled.add(actor) }
       if newly_committed && revision
-        analytics.try(&.emit(actor, @id + actor, "session_finished", @id, JSON.parse("{}"), revision: revision))
+        analytics.try(&.emit(actor, store.digest("analytics-result-id", {@id, actor}.to_json), "session_finished", @id, JSON.parse("{}"), revision: revision))
       end
     end
 
