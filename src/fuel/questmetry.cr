@@ -20,7 +20,7 @@ module Fuel
                    @context : JSON::Any = JSON.parse("{}"), @playtest : String? = nil,
                    client_events : Array(String) = [] of String, &@send : String -> Int32)
       Fuel.key(@environment)
-      Fuel.check(@version.matches?(/\A[a-zA-Z0-9.+_-]{1,80}\z/) && @max_pending > 0, "invalid_analytics_config")
+      Fuel.check(@environment.bytesize <= 40 && @version.matches?(/\A[a-zA-Z0-9.+_-]{1,80}\z/) && @max_pending > 0, "invalid_analytics_config")
       Fuel.check(@pseudonym_key.nil? || @pseudonym_key.not_nil!.bytesize >= 32, "invalid_server_keys")
       Fuel.check(@context.to_json.bytesize <= 2048 && @context.raw.is_a?(Hash), "invalid_analytics_config")
       Fuel.check(@playtest.nil? || @playtest.not_nil!.matches?(/\A[a-zA-Z0-9_-]{1,80}\z/), "invalid_analytics_config")
@@ -100,6 +100,7 @@ module Fuel
     private def validate(id : String, name : String, session : String, properties : JSON::Any)
       Fuel.key(id)
       Fuel.key(name)
+      Fuel.check(name.bytesize <= 80 && name.matches?(/\A[a-z][a-z0-9]*(?:_[a-z0-9]+)*\z/), "invalid_event")
       Fuel.check(session.bytesize <= 200, "invalid_event")
       allowed = @events[name]?
       Fuel.check(!allowed.nil? && properties.as_h.keys.all? { |k| allowed.not_nil!.includes?(k) }, "invalid_event")
@@ -135,6 +136,7 @@ module Fuel
 
     private def admit(c : DB::Connection, account : String, id : String, name : String, session : String, properties : JSON::Any, occurred_at : Time,
                       revision : Int64?, source : String = "server", reserved = false) : String
+      Fuel.check(id.bytesize <= 80, "invalid_event")
       preference = c.query_one?("SELECT analytics_enabled,analytics_revision FROM fuel_accounts WHERE ns=$1 AND id=$2 FOR UPDATE NOWAIT", @store.namespace, account, as: {Bool, Int64})
       return "disabled" unless preference
       enabled, current = preference

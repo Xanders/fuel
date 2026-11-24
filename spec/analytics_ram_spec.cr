@@ -30,6 +30,72 @@ end
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "RAM-only analytics" do
+    it "drops an invalid trusted wire ID without sending it beside healthy events" do
+      store = Fuel::Store.new(url, "ram_wire_id_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      actor = store.bootstrap(proof, "test")
+      sent = [] of JSON::Any
+      sink = Fuel::Questmetry.new(store, {"view" => [] of String}, "test", "1.0") do |body|
+        sent.concat(JSON.parse(body)["events"].as_a)
+        202
+      end
+      begin
+        sink.capture(proof, "healthy", "view", "", JSON.parse("{}")).should eq("queued")
+        sink.emit(actor, "x" * 81, "view", "", JSON.parse("{}"), revision: 0_i64)
+        deadline = Time.instant + 3.seconds
+        while sink.pending > 0 && Time.instant < deadline
+          sink.drain
+          sleep 1.millisecond
+        end
+        sink.pending.should eq(0)
+        sent.map { |event| event["event_id"].as_s }.should eq(["healthy"])
+      ensure
+        store.close
+      end
+    end
+
+    it "checks outgoing IDs after client keying and enforces receiver event names" do
+      store = Fuel::Store.new(url, "ram_wire_names_#{Fuel.id}", "d" * 32, "p" * 32)
+      store.migrate
+      proof = Fuel::Credential.new(Fuel.id, Random::Secure.hex(32))
+      store.bootstrap(proof, "test")
+      invalid_names = ["match-finished", "Match_finished", "a" * 81]
+      names = {"view" => [] of String, "a" * 80 => [] of String}
+      invalid_names.each { |name| names[name] = [] of String }
+      sent = [] of JSON::Any
+      sink = Fuel::Questmetry.new(store, names, "test", "1.0", client_events: ["view"]) do |body|
+        sent.concat(JSON.parse(body)["events"].as_a)
+        202
+      end
+      begin
+        sink.capture(proof, "x" * 80, "a" * 80, "", JSON.parse("{}")).should eq("queued")
+        sink.capture_client(proof, "x" * 100, "view", "", JSON.parse("{}"), 0_i64).should eq("queued")
+        expect_raises(Fuel::Error, "invalid_event") { sink.capture(proof, "x" * 81, "view", "", JSON.parse("{}")) }
+        invalid_names.each do |name|
+          expect_raises(Fuel::Error, "invalid_event") { sink.capture(proof, Fuel.id, name, "", JSON.parse("{}")) }
+        end
+        sink.drain
+        sent.size.should eq(2)
+        sent.all? { |event| event["event_id"].as_s.bytesize <= 80 }.should be_true
+        sent.find { |event| event["source"] == "client" }.not_nil!["event_id"].as_s.bytesize.should eq(64)
+      ensure
+        store.close
+      end
+    end
+
+    it "rejects environments exceeding the receiver limit at configuration" do
+      store = Fuel::Store.new(url, "ram_wire_environment_#{Fuel.id}", "d" * 32, "p" * 32)
+      begin
+        Fuel::Questmetry.new(store, {"view" => [] of String}, "a" * 40, "1.0") { |_| 202 }
+        expect_raises(Fuel::Error, "invalid_analytics_config") do
+          Fuel::Questmetry.new(store, {"view" => [] of String}, "a" * 41, "1.0") { |_| 202 }
+        end
+      ensure
+        store.close
+      end
+    end
+
     it "never stores accepted payloads or replays them through a restarted adapter" do
       store = Fuel::Store.new(url, "ram_restart_#{Fuel.id}", "d" * 32, "p" * 32)
       store.migrate
