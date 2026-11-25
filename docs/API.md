@@ -24,7 +24,7 @@ Native credentials use `Authorization: Fuel <binding-id>:<secret>` over TLS. Bro
 | POST | auth/delete/status | `{account_id,proof}`; narrow `deleted/removed_bindings` or `unknown`, works after login proof removal |
 | POST | auth/pair | Issue ID, six-character code, mode and five-minute expiry interval. Basic mode requires `{"flow":"basic-v1"}` |
 | GET | auth/pair/issued?id=... | Issuing device reads pending status, confirmation phrase or basic completion |
-| GET | auth/pair/prepare | Browser candidate; `new=true` only deliberately abandons the old attempt |
+| GET | auth/pair/prepare | Browser candidate. Basic requires `flow=basic-v1`. `new=true` deliberately abandons an old candidate where the client has no unresolved selection |
 | POST | auth/pair/request | Confirmed mode. `{code}` using candidate proof returns a pending ID and phrase |
 | POST | auth/pair/redeem | Basic mode. `{code}` using native candidate proof, or browser candidate cookie with `{code,target_id,from}`. Binds the candidate; selects it in the same browser response |
 | GET | auth/pair/pending | Issuing device's pending confirmed requests and phrases |
@@ -60,6 +60,8 @@ Native credentials use `Authorization: Fuel <binding-id>:<secret>` over TLS. Bro
 ## Device transfer
 
 The server selects `Fuel::PairMode::Confirmed` (default), `Basic`, or `Disabled` through `Store.new(..., pair_mode: ...)`. The default and legacy request route retain confirmation. The `flow` field only declares that an issuing client supports the basic protocol. The server chooses the mode and includes it in its issue response. Turn on basic only with a compatible client. A legacy issuer gets `transfer_update_required`.
+
+In basic mode, candidate preparation without the capability returns `transfer_update_required` without changing cookies. An older browser activation that omits `from` gets retryable `503 maintenance` before reading the candidate. This keeps a cached older SDK from discarding a newer client's shared recovery intent on a permanent error. Refresh or upgrade those clients before using transfer.
 
 In **basic** mode, prepare and retain B's candidate proof before submitting the six-character code. A successful `POST auth/pair/redeem` links the candidate permanently and consumes the code in one transaction. No action or connection on A is needed. A native client then selects the already authorized proof in its vault. A browser sends the frozen candidate ID and former current binding ID (or null) from `auth/selection`. A changed slot returns `selection_changed`; an already-selected target permits an exact retry. On success the browser gets the active cookie in the redemption response and its former current proof becomes previous. Exact retries with the same code and candidate proof return the same completion within the receipt window. A different candidate cannot replay it.
 

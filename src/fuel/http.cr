@@ -64,6 +64,9 @@ module Fuel
       end
       if ["/fuel/v1/auth/prepare", "/fuel/v1/auth/pair/prepare"].includes?(path) && context.request.method == "GET"
         slot = path.ends_with?("pair/prepare") ? "__Host-fuel-candidate" : "__Host-fuel"
+        if slot == "__Host-fuel-candidate" && @store.pair_mode.basic?
+          Fuel.check(context.request.query_params["flow"]? == "basic-v1", "transfer_update_required")
+        end
         existing = read_credential(context, slot)
         credential = existing || Credential.new(Fuel.id, Random::Secure.hex(32))
         if slot == "__Host-fuel-candidate"
@@ -89,6 +92,11 @@ module Fuel
         return
       end
       data = context.request.method == "POST" ? body(context) : JSON.parse("{}")
+      if path == "/fuel/v1/auth/pair/activate" && context.request.method == "POST" && @store.pair_mode.basic?
+        # A cached legacy SDK treats any unknown selection intent as activation
+        # and clears it on a 4xx. Preserve that journal for the new client.
+        Fuel.check(data.as_h.has_key?("from"), "maintenance")
+      end
       if path == "/fuel/v1/auth/selection" && context.request.method == "GET"
         current = read_credential(context)
         previous = read_credential(context, "__Host-fuel-previous")
@@ -172,14 +180,14 @@ module Fuel
       code = error.code == "rate_limit" ? "rate_limited" : error.code
       context.response.headers["Connection"] = "close" if error.code == "too_large"
       context.response.status_code = case code
-                                     when "unauthorized"                                                                                                           then 401
-                                     when "forbidden"                                                                                                              then 403
-                                     when "not_found"                                                                                                              then 404
-                                     when "too_large"                                                                                                              then 413
-                                     when "capacity", "rate_limited", "poll_active"                                                                                then 429
-                                     when "maintenance", "saving_backlog"                                                                                          then 503
-                                     when "conflict", "selection_changed", "revision_conflict", "session_lost", "session_ended", "stale_input", "stale_connection" then 409
-                                     else                                                                                                                               400
+                                     when "unauthorized"                                                                                      then 401
+                                     when "forbidden"                                                                                         then 403
+                                     when "not_found"                                                                                         then 404
+                                     when "too_large"                                                                                         then 413
+                                     when "capacity", "rate_limited", "poll_active"                                                           then 429
+                                     when "maintenance", "saving_backlog"                                                                     then 503
+                                     when "conflict", "revision_conflict", "session_lost", "session_ended", "stale_input", "stale_connection" then 409
+                                     else                                                                                                          400
                                      end
       context.response.print({wire_version: 1, error: code}.to_json)
     rescue JSON::ParseException | TypeCastError | KeyError | ArgumentError | OverflowError

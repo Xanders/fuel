@@ -121,15 +121,19 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
       begin
         origin = HTTP::Headers{"Origin" => "https://game.example"}
         slot = "__Host-fuel-#{Digest::SHA256.hexdigest(store.namespace)}"
-        candidate = client.get("/fuel/v1/auth/pair/prepare", origin).headers["Set-Cookie"].split(';').first
+        client.get("/fuel/v1/auth/pair/prepare", origin).status_code.should eq(400)
+        candidate = client.get("/fuel/v1/auth/pair/prepare?flow=basic-v1", origin).headers["Set-Cookie"].split(';').first
         current_binding = candidate.split('=', 2)[1].split(':', 2)[0]
         origin["Cookie"] = "#{slot}=#{b.id}:#{b.secret}; #{candidate}"
         body = {code: issued["code"].as_s, target_id: current_binding, from: b.id}.to_json
+        client.post("/fuel/v1/auth/pair/activate", origin, {target_id: current_binding}.to_json).status_code.should eq(503)
         untrusted = origin.dup
         untrusted["Origin"] = "https://other.example"
         HTTP::Client.post("http://#{address}/fuel/v1/auth/pair/redeem", untrusted, body).status_code.should eq(403)
         wrong_target = {code: issued["code"].as_s, target_id: a.id, from: b.id}.to_json
-        client.post("/fuel/v1/auth/pair/redeem", origin, wrong_target).status_code.should eq(409)
+        fenced = client.post("/fuel/v1/auth/pair/redeem", origin, wrong_target)
+        fenced.status_code.should eq(400)
+        JSON.parse(fenced.body)["error"].as_s.should eq("selection_changed")
         redeemed = client.post("/fuel/v1/auth/pair/redeem", origin, body)
         redeemed.status_code.should eq(200)
         cookies = redeemed.headers.get("Set-Cookie").map { |cookie| cookie.split(';').first }
