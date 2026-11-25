@@ -3,6 +3,8 @@ require "mime"
 module Fuel
   class Runtime
     include HTTP::Handler
+
+    private PROCESS_STARTED_AT = Time.instant
     @server : HTTP::Server?
     @accepting = true
     @running = false
@@ -53,6 +55,7 @@ module Fuel
       @mutex.synchronize do
         safe = database && !@accepting && @inflight == 0 && @workers == 0 && stats[:active] == 0 && stats[:pending] == 0 && stats[:quarantined] == 0
         Fuel.json({version: VERSION, database: database, accepting: @accepting, rooms: stats[:rooms],
+                   process_uptime_seconds: (Time.instant - PROCESS_STARTED_AT).total_seconds,
                    active_sessions: stats[:active], pending_work: stats[:pending], quarantined_rooms: stats[:quarantined],
                    inflight: @inflight + @workers, safe_to_replace: safe})
       end
