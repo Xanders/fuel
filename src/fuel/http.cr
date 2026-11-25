@@ -72,9 +72,9 @@ module Fuel
         if slot == "__Host-fuel-candidate"
           renew = context.request.query_params["new"]? == "true"
           begin
-            status = @store.pair_status(credential)["status"].as_s
+            status = @store.pair_status(credential, terminal: context.request.query_params["flow"]? == "basic-v1")["status"].as_s
             retained = [read_credential(context).try(&.id), read_credential(context, "__Host-fuel-previous").try(&.id)]
-            renew ||= ["expired", "cancelled"].includes?(status) || status == "linked" && retained.includes?(credential.id)
+            renew ||= ["expired", "cancelled", "retired"].includes?(status) || status == "linked" && retained.includes?(credential.id)
           rescue error : Fuel::Error
             raise error unless ["unauthorized", "invalid_code"].includes?(error.code)
           end
@@ -134,7 +134,7 @@ module Fuel
         reply(context, Fuel.json({account_id: account}))
         return
       end
-      candidate_path = ["/fuel/v1/auth/pair/request", "/fuel/v1/auth/pair/status", "/fuel/v1/auth/pair/activate", "/fuel/v1/auth/pair/redeem"].includes?(path)
+      candidate_path = ["/fuel/v1/auth/pair/request", "/fuel/v1/auth/pair/status", "/fuel/v1/auth/pair/activate", "/fuel/v1/auth/pair/redeem", "/fuel/v1/auth/pair/abandon"].includes?(path)
       slot = candidate_path ? "__Host-fuel-candidate" : "__Host-fuel"
       credential = read_credential(context, slot) || raise Error.new("unauthorized")
       if path == "/fuel/v1/auth/pair/status" && (target = context.request.query_params["target_id"]?)
@@ -167,7 +167,10 @@ module Fuel
                  select_pair_cookie(context, credential, previous) if browser
                  redeemed
                elsif path == "/fuel/v1/auth/pair/status" && context.request.method == "GET"
-                 @store.pair_status(credential)
+                 @store.pair_status(credential, terminal: !target.nil?)
+               elsif path == "/fuel/v1/auth/pair/abandon" && context.request.method == "POST"
+                 Fuel.check(data["target_id"]? == credential.id, "selection_changed")
+                 @store.abandon_pair(credential, source)
                else
                  dispatch(context, credential, data)
                end

@@ -31,7 +31,8 @@ Native credentials use `Authorization: Fuel <binding-id>:<secret>` over TLS. Bro
 | GET | auth/pair/pending | Issuing device's pending confirmed requests and phrases |
 | POST | auth/pair/approve | `{id}` on the issuing device completes a confirmed request |
 | POST | auth/pair/cancel | `{id}`; cancel an own pending request |
-| GET | auth/pair/status | Candidate's pending/linked/expired/cancelled status. Optional `target_id` fences the candidate slot |
+| GET | auth/pair/status | Candidate's pending/linked/expired/cancelled status. `target_id` fences the exact candidate and enables `retired` for a permanently unusable binding |
+| POST | auth/pair/abandon | `{target_id}` with candidate proof. Retires the candidate if unlinked or revoked, or returns `transfer_completed` if it has a live link |
 | GET | auth/selection | Read-only browser current/previous public metadata and candidate ID. A rejected current proof retains its binding ID with null account_id; rejected previous is null. No cookie is cleared |
 | POST | auth/pair/activate | `{target_id}` for legacy activation, or `{target_id,from}` to fence both browser slots. Select the linked candidate and retain the previous guest |
 | POST | auth/switch | `{from,to}` binding IDs; `from:null` permits selecting a surviving previous proof; repeating an already-selected target does not toggle |
@@ -67,6 +68,8 @@ In basic mode, candidate preparation without the capability returns `transfer_up
 In **basic** mode, prepare and retain B's candidate proof before submitting the six-character code. A successful `POST auth/pair/redeem` links the candidate permanently and consumes the code in one transaction. No action or connection on A is needed. A native client then selects the already authorized proof in its vault. A browser sends the frozen candidate ID and former current binding ID (or null) from `auth/selection`. A changed slot returns `selection_changed`; an already-selected target permits an exact retry. On success the browser gets the active cookie in the redemption response and its former current proof becomes previous. Exact retries with the same code and candidate proof return the same completion within the receipt window. A different candidate cannot replay it.
 
 Completion data is `{id,status:"linked",mode:"basic",account_id,emojis:[...three ordered strings]}`. The issuer can resume polling `auth/pair/issued?id=...` using the issued ID after coming online. The same receipt is available to both participating bindings until one day after the code's expiration. Poll while displaying the transfer and check on reconnect; Fuel has no push notification for this flow. After the notice expires, the linked candidate still reads `{status:"linked",mode:"basic",account_id}` through `auth/pair/status`. The strings are a post-transfer notice. Closing or omitting the notice leaves the binding intact.
+
+If the original B proof is unavailable during recovery, `auth/pair/abandon` can settle the frozen candidate. A retired result is final and fences a late redemption. A live completed link wins and can still be recovered with the same proof. If the response is lost, check the exact `target_id` status again. Abandonment uses its own source and namespace rate limits.
 
 In **confirmed** mode, B sends `auth/pair/request` and receives a pending ID and comparison phrase. A compares the same phrase and confirms that ID with `auth/pair/approve` on the issuing device. Only then can B use or select the candidate. Both modes refuse uncompleted codes whose issuing binding is revoked. The guest previously selected on B can be restored separately with `auth/switch`; progress is never merged. [Upgrade and rollback](MIGRATION.md#device-transfer-at-040).
 

@@ -254,13 +254,18 @@ module Fuel
       end
     end
 
-    def pair_status(candidate : Credential) : JSON::Any
+    def pair_status(candidate : Credential, *, terminal : Bool = false) : JSON::Any
       check_pairing
       transaction do |c|
         binding = c.query_one?("SELECT verifier,account,revoked,basic_transfer FROM fuel_bindings WHERE ns=$1 AND id=$2 FOR UPDATE", @namespace, candidate.id, as: {String, String?, Bool, Bool})
-        Fuel.check(!binding.nil?, "unauthorized")
-        b = binding.not_nil!
-        Fuel.check(!b[2] && verify_proof(c, candidate, b[0]), "unauthorized")
+        unless b = binding
+          if terminal && c.query_one?("SELECT id FROM fuel_retired_bindings WHERE ns=$1 AND id=$2", @namespace, candidate.id, as: String)
+            next Fuel.json({status: "retired"})
+          end
+          raise Error.new("unauthorized")
+        end
+        Fuel.check((!b[2] || terminal && b[3]) && verify_proof(c, candidate, b[0]), "unauthorized")
+        next Fuel.json({status: "retired"}) if b[2]
         if account = b[1]
           receipt = c.query_one?("SELECT id,phrase FROM fuel_pairs WHERE ns=$1 AND candidate=$2 AND account=$3 AND status='basic_linked' AND expires_at>now()-interval '1 day'", @namespace, candidate.id, account, as: {String, String})
           next basic_pair_receipt(receipt[0], account, receipt[1]) if receipt
@@ -275,6 +280,14 @@ module Fuel
         raise Error.new("invalid_code") unless row
         Fuel.json({id: row[0], phrase: row[1], status: row[3] ? row[2] : "expired"})
       end
+    end
+
+    def abandon_pair(candidate : Credential, source : String) : JSON::Any
+      check_pairing
+      limit("pair:abandon:global", 20, 60)
+      limit("pair:abandon:source:#{source}", 3, 60)
+      transaction { |c| retire_unlinked_pair(c, candidate) }
+      Fuel.json({status: "retired"})
     end
 
     private PAIR_EMOJIS = {"🐶", "🐱", "🦊", "🐼", "🐸", "🐙", "🦋", "🐢", "🍎", "🍋", "🍉", "🍓", "🥕", "🍕", "🍩", "🍇"}

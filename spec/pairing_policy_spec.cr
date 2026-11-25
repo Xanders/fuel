@@ -7,6 +7,31 @@ end
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "ordinary transfer authorization" do
+    it "distinguishes retired candidates from unresolved and retains a live racing link" do
+      store = Fuel::Store.new(url, "pair_retire_#{Fuel.id}", "d" * 32, "p" * 32, pair_mode: Fuel::PairMode::Basic)
+      begin
+        store.migrate
+        a, target, pending = pairing_proof, pairing_proof, pairing_proof
+        owner = store.bootstrap(a, "a")
+        first = store.issue_pair(a, supports_basic: true)["code"].as_s
+        store.redeem_pair(first, target, "b")
+        expect_raises(Fuel::Error, "transfer_completed") { store.abandon_pair(target, "b") }
+        store.authenticate(target).should eq(owner)
+        store.revoke(a, target.id)
+        expect_raises(Fuel::Error, "unauthorized") { store.pair_status(target) }
+        store.pair_status(target, terminal: true)["status"].as_s.should eq("retired")
+        wrong_proof = Fuel::Credential.new(target.id, Random::Secure.hex(32))
+        expect_raises(Fuel::Error, "unauthorized") { store.pair_status(wrong_proof, terminal: true) }
+        second = store.issue_pair(a, supports_basic: true)["code"].as_s
+        expect_raises(Fuel::Error, "unauthorized") { store.pair_status(pending, terminal: true) }
+        store.abandon_pair(pending, "b")["status"].as_s.should eq("retired")
+        expect_raises(Fuel::Error, "invalid_code") { store.redeem_pair(second, pending, "b") }
+        store.pair_status(pending, terminal: true)["status"].as_s.should eq("retired")
+      ensure
+        store.close
+      end
+    end
+
     it "fences a delayed redemption when B is deleted without cutting off an already linked device" do
       store = Fuel::Store.new(url, "pair_delete_#{Fuel.id}", "d" * 32, "p" * 32, pair_mode: Fuel::PairMode::Basic)
       begin
