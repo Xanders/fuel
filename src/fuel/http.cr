@@ -237,9 +237,19 @@ module Fuel
         return Fuel.json({status: "revoked"})
       elsif method == "GET" && path == "progress"
         return @store.progress(credential)
-      elsif method == "POST" && path == "auth/delete"
+      elsif method == "POST" && path.in?("auth/delete", "auth/delete/with-transfer")
         account = @store.authenticate(credential)
-        result = @store.delete_account(credential, data["confirmed"].as_bool, data["proof"].as_s, data["account_id"].as_s) { |c, owner| @deletion_hook.try(&.call(c, owner)) }
+        abandon = if path == "auth/delete/with-transfer"
+                    candidate_id = data["abandon_candidate_id"].as_s
+                    if context.request.headers.has_key?("Authorization")
+                      Credential.new(candidate_id, data["abandon_candidate_secret"].as_s)
+                    else
+                      candidate = read_credential(context, "__Host-fuel-candidate")
+                      Fuel.check(candidate.try(&.id) == candidate_id, "selection_changed")
+                      candidate
+                    end
+                  end
+        result = @store.delete_account(credential, data["confirmed"].as_bool, data["proof"].as_s, data["account_id"].as_s, abandon: abandon) { |c, owner| @deletion_hook.try(&.call(c, owner)) }
         @sessions.remove_account(account)
         @chat.remove_account(account)
         clear_deleted_cookies(context, result)

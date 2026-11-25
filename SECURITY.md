@@ -36,6 +36,8 @@ Cookie slots are namespaced by the configured store namespace, not shared global
 
 Deleting an account requires confirmation, expected owner and a saved random deletion proof. Its keyed status receipt survives for 30 days and reveals only the deletion outcome/public binding IDs. It is not a general account recovery secret. Old deleted binding IDs cannot bootstrap again. Deleting the current account does not erase another retained account's proof. Revoking the last active binding requires separate confirmation.
 
+If the current account has an unresolved basic transfer, the client sends its exact candidate proof along with the current account's deletion request. Fuel serializes candidate retirement with redemption. It rejects deletion if the candidate already has a valid link. Redact both proofs from request logs.
+
 Binding admission rechecks retired IDs after insertion within the same transaction. A deletion committed while binding access waited rejects the old proof and rolls back the new account or candidate binding; it cannot silently recreate a guest or prepare a transfer under a retired ID.
 
 Public account actions are allowlisted independently from server effects. Sorted participant locks protect transfers; binding authority is revalidated after those locks and retained through short private delivery boundaries. Domain hooks receive copied JSON and bounded descriptors, not credentials or database/network handles. Game code must still validate legal quantities, generations, ranges and reward eligibility.

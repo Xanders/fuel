@@ -21,6 +21,7 @@ Native credentials use `Authorization: Fuel <binding-id>:<secret>` over TLS. Bro
 | GET | auth/bindings | Own bindings, current/revoked flags and created/last-seen metadata |
 | POST | auth/revoke | `{id,confirmed_last:false}`; the last active binding requires explicit confirmation |
 | POST | auth/delete | `{confirmed:true,account_id,proof}`; proof is a saved random 64-hex deletion-operation secret |
+| POST | auth/delete/with-transfer | Same request plus `abandon_candidate_id` for the pending basic transfer. Browser uses the matching candidate cookie. Native also supplies `abandon_candidate_secret`. |
 | POST | auth/delete/status | `{account_id,proof}`; narrow `deleted/removed_bindings` or `unknown`, works after login proof removal |
 | POST | auth/pair | Issue ID, six-character code, mode and five-minute expiry interval. Basic mode requires `{"flow":"basic-v1"}` |
 | GET | auth/pair/issued?id=... | Issuing device reads pending status, confirmation phrase or basic completion |
@@ -104,6 +105,8 @@ and exact retries. The canonical HTTP Handler and SDK expose no new endpoint.
 - `invalid_code`: generic missing/used/expired-code outcome. Keep the candidate proof through uncertain retries. Confirmed mode requires the issuing device's approval before access.
 
 Deletion status is retained for 30 days. It reveals only that operation's outcome and removed public binding IDs, never progress or a usable login proof. Retired binding IDs remain tombstoned so an old secret cannot recreate a deleted account. The consumer must include any additional data owners in its transactional purge hook.
+
+When B deletes its original guest with an unresolved basic transfer, use `auth/delete/with-transfer` with B's current proof and the exact candidate. Deletion retires an unlinked candidate in the same transaction and includes its ID in `removed_bindings`, so a delayed redemption cannot link it. If redemption already linked an active candidate, the operation returns `transfer_completed` and deletes nothing. Recover the linked selection before asking the user to select and confirm deletion of the intended account. Keep the native candidate secret out of logs.
 
 Chat kinds are instance-global, session (room membership), guild (application policy callback), private (canonical participant pair). History/persistence are optional per kind. Default private chat permits authenticated accounts to message each other; game-specific consent/block policy and moderation operations remain application policy.
 

@@ -7,6 +7,34 @@ end
 
 if url = ENV["FUEL_TEST_DATABASE_URL"]?
   describe "ordinary transfer authorization" do
+    it "fences a delayed redemption when B is deleted without cutting off an already linked device" do
+      store = Fuel::Store.new(url, "pair_delete_#{Fuel.id}", "d" * 32, "p" * 32, pair_mode: Fuel::PairMode::Basic)
+      begin
+        store.migrate
+        a, b, c, fresh, linked = pairing_proof, pairing_proof, pairing_proof, pairing_proof, pairing_proof
+        owner = store.bootstrap(a, "a")
+        b_account = store.bootstrap(b, "b")
+        c_account = store.bootstrap(c, "c")
+        first = store.issue_pair(a, supports_basic: true)["code"].as_s
+        receipt = store.delete_account(b, true, "b" * 64, b_account, abandon: fresh)
+        receipt["removed_bindings"].as_a.map(&.as_s).should eq([b.id, fresh.id])
+        store.deletion_status("b" * 64, b_account).should eq(receipt)
+        expect_raises(Fuel::Error, "invalid_code") { store.redeem_pair(first, fresh, "test") }
+        store.authenticate(c).should eq(c_account)
+        next_code = store.issue_pair(a, supports_basic: true)["code"].as_s
+        linked_receipt = store.redeem_pair(next_code, linked, "test")
+        expect_raises(Fuel::Error, "transfer_completed") do
+          store.delete_account(c, true, "c" * 64, c_account, abandon: linked)
+        end
+        store.authenticate(c).should eq(c_account)
+        store.authenticate(linked).should eq(owner)
+        store.pair_status(linked).should eq(linked_receipt)
+        store.deletion_status("c" * 64, c_account)["status"].as_s.should eq("unknown")
+      ensure
+        store.close
+      end
+    end
+
     it "links exactly one basic candidate, preserves progress and returns the same notice to A and B" do
       store = Fuel::Store.new(url, "base_pair_#{Fuel.id}", "d" * 32, "p" * 32, pair_mode: Fuel::PairMode::Basic)
       begin
