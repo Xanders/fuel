@@ -34,6 +34,8 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
         store.bindings(a).size.should eq(2)
         store.revoke(candidate, a.id)
         store.redeem_pair(code, candidate, "b").should eq(linked)
+        store.db.exec("DELETE FROM fuel_pairs WHERE ns=$1 AND id=$2", store.namespace, id)
+        store.pair_status(candidate).should eq(Fuel.json({status: "linked", mode: "basic", account_id: owner}))
       ensure
         store.close
       end
@@ -120,11 +122,14 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
         origin = HTTP::Headers{"Origin" => "https://game.example"}
         slot = "__Host-fuel-#{Digest::SHA256.hexdigest(store.namespace)}"
         candidate = client.get("/fuel/v1/auth/pair/prepare", origin).headers["Set-Cookie"].split(';').first
+        current_binding = candidate.split('=', 2)[1].split(':', 2)[0]
         origin["Cookie"] = "#{slot}=#{b.id}:#{b.secret}; #{candidate}"
-        body = {code: issued["code"].as_s}.to_json
+        body = {code: issued["code"].as_s, target_id: current_binding, from: b.id}.to_json
         untrusted = origin.dup
         untrusted["Origin"] = "https://other.example"
         HTTP::Client.post("http://#{address}/fuel/v1/auth/pair/redeem", untrusted, body).status_code.should eq(403)
+        wrong_target = {code: issued["code"].as_s, target_id: a.id, from: b.id}.to_json
+        client.post("/fuel/v1/auth/pair/redeem", origin, wrong_target).status_code.should eq(409)
         redeemed = client.post("/fuel/v1/auth/pair/redeem", origin, body)
         redeemed.status_code.should eq(200)
         cookies = redeemed.headers.get("Set-Cookie").map { |cookie| cookie.split(';').first }
@@ -138,7 +143,6 @@ if url = ENV["FUEL_TEST_DATABASE_URL"]?
         JSON.parse(duplicate.body)["data"].should eq(result)
         duplicate.headers.get("Set-Cookie").none? { |cookie| cookie.starts_with?("#{slot}-previous=") }.should be_true
         client.get("/fuel/v1/account", origin).status_code.should eq(200)
-        current_binding = candidate.split('=', 2)[1].split(':', 2)[0]
         switched = client.post("/fuel/v1/auth/switch", origin, {from: current_binding, to: b.id}.to_json)
         JSON.parse(switched.body)["data"]["account_id"].as_s.should eq(previous)
       ensure

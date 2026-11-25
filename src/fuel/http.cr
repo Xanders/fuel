@@ -129,10 +129,15 @@ module Fuel
       candidate_path = ["/fuel/v1/auth/pair/request", "/fuel/v1/auth/pair/status", "/fuel/v1/auth/pair/activate", "/fuel/v1/auth/pair/redeem"].includes?(path)
       slot = candidate_path ? "__Host-fuel-candidate" : "__Host-fuel"
       credential = read_credential(context, slot) || raise Error.new("unauthorized")
+      if path == "/fuel/v1/auth/pair/status" && (target = context.request.query_params["target_id"]?)
+        Fuel.check(target == credential.id, "selection_changed")
+      end
       if path == "/fuel/v1/auth/pair/activate" && context.request.method == "POST"
         Fuel.check(data["target_id"].as_s == credential.id, "conflict")
+        current = read_credential(context)
+        check_pair_selection(data, credential, current) if data.as_h.has_key?("from")
         account = @store.authenticate(credential)
-        select_pair_cookie(context, credential, read_credential(context))
+        select_pair_cookie(context, credential, current)
         reply(context, Fuel.json({account_id: account}))
         return
       end
@@ -149,6 +154,7 @@ module Fuel
                elsif path == "/fuel/v1/auth/pair/redeem" && context.request.method == "POST"
                  browser = !context.request.headers.has_key?("Authorization")
                  previous = read_credential(context) if browser
+                 check_pair_selection(data, credential, previous) if browser
                  redeemed = @store.redeem_pair(data["code"].as_s, credential, source)
                  select_pair_cookie(context, credential, previous) if browser
                  redeemed
@@ -166,14 +172,14 @@ module Fuel
       code = error.code == "rate_limit" ? "rate_limited" : error.code
       context.response.headers["Connection"] = "close" if error.code == "too_large"
       context.response.status_code = case code
-                                     when "unauthorized"                                                                                      then 401
-                                     when "forbidden"                                                                                         then 403
-                                     when "not_found"                                                                                         then 404
-                                     when "too_large"                                                                                         then 413
-                                     when "capacity", "rate_limited", "poll_active"                                                           then 429
-                                     when "maintenance", "saving_backlog"                                                                     then 503
-                                     when "conflict", "revision_conflict", "session_lost", "session_ended", "stale_input", "stale_connection" then 409
-                                     else                                                                                                          400
+                                     when "unauthorized"                                                                                                           then 401
+                                     when "forbidden"                                                                                                              then 403
+                                     when "not_found"                                                                                                              then 404
+                                     when "too_large"                                                                                                              then 413
+                                     when "capacity", "rate_limited", "poll_active"                                                                                then 429
+                                     when "maintenance", "saving_backlog"                                                                                          then 503
+                                     when "conflict", "selection_changed", "revision_conflict", "session_lost", "session_ended", "stale_input", "stale_connection" then 409
+                                     else                                                                                                                               400
                                      end
       context.response.print({wire_version: 1, error: code}.to_json)
     rescue JSON::ParseException | TypeCastError | KeyError | ArgumentError | OverflowError
@@ -392,6 +398,11 @@ module Fuel
     private def select_pair_cookie(context, credential : Credential, previous : Credential?)
       cookie(context, previous, "__Host-fuel-previous") if previous && previous.id != credential.id
       cookie(context, credential)
+    end
+
+    private def check_pair_selection(data : JSON::Any, target : Credential, current : Credential?)
+      Fuel.check(data["target_id"]? == target.id && data.as_h.has_key?("from"), "selection_changed")
+      Fuel.check(current.try(&.id) == data["from"].as_s? || current.try(&.id) == target.id, "selection_changed")
     end
 
     private def clear_deleted_cookies(context, result : JSON::Any)

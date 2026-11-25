@@ -198,7 +198,7 @@ module Fuel
         Fuel.check(status == "basic_pending" && live && prior.nil?, "invalid_code")
         prepare_pair_binding(c, candidate)
         check_pair_issuer(c, account, issuer)
-        link_pair_binding(c, candidate.id, account, id)
+        link_pair_binding(c, candidate.id, account, id, basic: true)
         emojis = Array.new(3) { PAIR_EMOJIS[Random::Secure.rand(PAIR_EMOJIS.size)] }.to_json
         c.exec("UPDATE fuel_pairs SET candidate=$3,phrase=$4,status='basic_linked' WHERE ns=$1 AND id=$2", @namespace, id, candidate.id, emojis)
         basic_pair_receipt(id, account, emojis)
@@ -257,13 +257,14 @@ module Fuel
     def pair_status(candidate : Credential) : JSON::Any
       check_pairing
       transaction do |c|
-        binding = c.query_one?("SELECT verifier,account,revoked FROM fuel_bindings WHERE ns=$1 AND id=$2 FOR UPDATE", @namespace, candidate.id, as: {String, String?, Bool})
+        binding = c.query_one?("SELECT verifier,account,revoked,basic_transfer FROM fuel_bindings WHERE ns=$1 AND id=$2 FOR UPDATE", @namespace, candidate.id, as: {String, String?, Bool, Bool})
         Fuel.check(!binding.nil?, "unauthorized")
         b = binding.not_nil!
         Fuel.check(!b[2] && verify_proof(c, candidate, b[0]), "unauthorized")
         if account = b[1]
           receipt = c.query_one?("SELECT id,phrase FROM fuel_pairs WHERE ns=$1 AND candidate=$2 AND account=$3 AND status='basic_linked' AND expires_at>now()-interval '1 day'", @namespace, candidate.id, account, as: {String, String})
           next basic_pair_receipt(receipt[0], account, receipt[1]) if receipt
+          next Fuel.json({status: "linked", mode: "basic", account_id: account}) if b[3]
           next Fuel.json({status: "linked", account_id: account})
         end
         row = c.query_one?(<<-SQL, @namespace, candidate.id, as: {String, String?, String, Bool})
@@ -318,9 +319,9 @@ module Fuel
       Fuel.check(!stored.nil? && verify_proof(c, candidate, stored), "invalid_code")
     end
 
-    private def link_pair_binding(c : DB::Connection, candidate : String, account : String, id : String)
-      updated = c.exec(<<-SQL, @namespace, candidate, account, id)
-        UPDATE fuel_bindings SET account=$3,expires_at=NULL
+    private def link_pair_binding(c : DB::Connection, candidate : String, account : String, id : String, basic = false)
+      updated = c.exec(<<-SQL, @namespace, candidate, account, id, basic)
+        UPDATE fuel_bindings SET account=$3,expires_at=NULL,basic_transfer=$5
         WHERE ns=$1 AND id=$2 AND account IS NULL AND NOT revoked AND expires_at>clock_timestamp()
         AND EXISTS (SELECT 1 FROM fuel_pairs WHERE ns=$1 AND id=$4 AND expires_at>clock_timestamp())
         SQL
