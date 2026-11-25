@@ -45,6 +45,7 @@ module Fuel
         return
       end
       Fuel.check(context.request.headers["X-Fuel-Version"]?.in?(nil, "1"), "unsupported_version")
+      Fuel.check(!@store.pair_mode.disabled?, "forbidden") if path == "/fuel/v1/auth/pair" || path.starts_with?("/fuel/v1/auth/pair/")
       unless @accepting.call
         session_mutation = path.starts_with?("/fuel/v1/sessions/") && context.request.method == "POST"
         allowed = context.request.method == "GET" || path.in?("/fuel/v1/analytics/enabled", "/fuel/v1/auth/delete/status") || session_mutation
@@ -125,16 +126,13 @@ module Fuel
         reply(context, Fuel.json({account_id: account}))
         return
       end
-      candidate_path = ["/fuel/v1/auth/pair/request", "/fuel/v1/auth/pair/status", "/fuel/v1/auth/pair/activate"].includes?(path)
+      candidate_path = ["/fuel/v1/auth/pair/request", "/fuel/v1/auth/pair/status", "/fuel/v1/auth/pair/activate", "/fuel/v1/auth/pair/redeem"].includes?(path)
       slot = candidate_path ? "__Host-fuel-candidate" : "__Host-fuel"
       credential = read_credential(context, slot) || raise Error.new("unauthorized")
       if path == "/fuel/v1/auth/pair/activate" && context.request.method == "POST"
         Fuel.check(data["target_id"].as_s == credential.id, "conflict")
         account = @store.authenticate(credential)
-        if previous = read_credential(context)
-          cookie(context, previous, "__Host-fuel-previous") if previous.id != credential.id
-        end
-        cookie(context, credential)
+        select_pair_cookie(context, credential, read_credential(context))
         reply(context, Fuel.json({account_id: account}))
         return
       end
@@ -148,6 +146,12 @@ module Fuel
                  Fuel.json({account_id: @store.bootstrap(credential, source)})
                elsif path == "/fuel/v1/auth/pair/request" && context.request.method == "POST"
                  @store.request_pair(data["code"].as_s, credential, source)
+               elsif path == "/fuel/v1/auth/pair/redeem" && context.request.method == "POST"
+                 browser = !context.request.headers.has_key?("Authorization")
+                 previous = read_credential(context) if browser
+                 redeemed = @store.redeem_pair(data["code"].as_s, credential, source)
+                 select_pair_cookie(context, credential, previous) if browser
+                 redeemed
                elsif path == "/fuel/v1/auth/pair/status" && context.request.method == "GET"
                  @store.pair_status(credential)
                else
@@ -202,7 +206,7 @@ module Fuel
         return poll(context, credential, parts[1])
       end
       if method == "POST" && path == "auth/pair"
-        return @store.issue_pair(credential)
+        return @store.issue_pair(credential, supports_basic: data["flow"]? == "basic-v1")
       elsif method == "POST" && path == "auth/pair/approve"
         return @store.approve_pair(credential, data["id"].as_s)
       elsif method == "GET" && path == "auth/pair/pending"
@@ -383,6 +387,11 @@ module Fuel
 
     private def cookie(context, credential, slot = "__Host-fuel")
       context.response.headers.add("Set-Cookie", "#{cookie_name(slot)}=#{credential.id}:#{credential.secret}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=34560000")
+    end
+
+    private def select_pair_cookie(context, credential : Credential, previous : Credential?)
+      cookie(context, previous, "__Host-fuel-previous") if previous && previous.id != credential.id
+      cookie(context, credential)
     end
 
     private def clear_deleted_cookies(context, result : JSON::Any)

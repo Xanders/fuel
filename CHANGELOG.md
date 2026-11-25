@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0 — basic and confirmed device transfer
+
+Set `Store.new(..., pair_mode: Fuel::PairMode::Basic)` to redeem a six-character code in one action. The new binding and a shared completion notice commit together. Confirmed transfers still require the issuing device to approve the exact phrase-matched request. Both modes check the current issuing binding before completion. The default remains confirmed. Existing pending rows without a recorded issuer must be reissued. Use SDK 0.4.0 for basic transfer. See the [upgrade and rollback steps](docs/MIGRATION.md#device-transfer-at-040).
+
 ## 0.3.15 — allow retirement of the legacy analytics outbox
 
 Schema setup no longer creates, alters or indexes `fuel_outbox`. Existing tables and rows stay in place until the database owner performs an authorized cleanup. Account opt-out and its revision are still stored in PostgreSQL. The RAM sender and the HTTP/SDK contract are unchanged. See the [cleanup and rollback precautions](docs/SOCIAL.md#upgrading-an-existing-durable-sender).

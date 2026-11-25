@@ -2,7 +2,7 @@
 
 Fuel is an MIT-licensed Crystal game backend framework. A game supplies pure account/combat rules and player-specific views; Fuel owns identity, persistence, sessions, joining, matching, transport, reliable effects and recovery.
 
-**Status: 0.3 development preview.** One backend process, tested Crystal 1.22.1 and PostgreSQL 17. Pin backend and SDK to reviewed compatible commits/releases; development APIs may change. No registry publication or production deployment is implied.
+**Status: 0.4 development preview.** One backend process, tested Crystal 1.22.1 and PostgreSQL 17. Pin backend and SDK to reviewed compatible commits/releases; development APIs may change. No registry publication or production deployment is implied.
 
 ## Deliberate limits
 
@@ -20,7 +20,7 @@ Fuel is an MIT-licensed Crystal game backend framework. A game supplies pure acc
 dependencies:
   fuel:
     github: Xanders/fuel
-    version: 0.3.15
+    version: 0.4.0
 ```
 
 Use an exact reviewed release tag or commit when updating a dependency.
@@ -32,7 +32,7 @@ Implement `Fuel::Rules` for RAM gameplay and `Fuel::AccountRules` for permanent 
 - Optional [trusted issuer enrollment/login](docs/TRUSTED_LOGIN.md), separate from
   owner-confirmed transfer, with one-time grants and ordinary Fuel bindings afterward.
 
-- Permanent guest devices, independent device bindings, owner-confirmed six-character transfer, revocation and account deletion.
+- Permanent guest devices, independent bindings, six-character transfer with a server-selected [basic or confirmed mode](docs/API.md#device-transfer), revocation and account deletion.
 - Pure persistent account hooks, sorted multi-account transactions, exact action receipts, terminal summaries and HTTP recovery after RAM session loss.
 - Bounded per-room FIFO effects, one head in flight, explicit saving backpressure and shared drain/health lifecycle.
 - Private invite codes and HTTPS links, public rooms, FIFO automatch, trusted co-op party matching.

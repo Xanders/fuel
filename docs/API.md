@@ -1,11 +1,9 @@
 # Wire API v1
 
 Optional trusted issuer enrollment/login is a [server-only Store API](TRUSTED_LOGIN.md).
-It adds no anonymous canonical HTTP route or replacement for owner-confirmed transfer.
+It adds no anonymous canonical HTTP route. Its credentials and policy are independent of ordinary device transfer.
 
-Fuel 0.3 is an experimental API; pin the server and SDK to the same reviewed release. `wire_version: 1` identifies the envelope, not compatibility with every earlier development API. The default prefix is `/fuel/v1`; `Handler(prefix: ...)` and the SDK base URI can select another application prefix.
-
-Fuel0.3.12 is wire-compatible with SDK0.3.7.
+Fuel is an experimental API. Pin the server and SDK to a reviewed compatible pair. Fuel 0.4.0 and SDK 0.4.0 support both device transfer modes. `wire_version: 1` identifies the envelope and does not establish compatibility on its own. The default prefix is `/fuel/v1`. `Handler(prefix: ...)` and the SDK base URI can select another application prefix.
 
 Success is `{"wire_version":1,"data":...}` and error is `{"wire_version":1,"error":"code"}`. Send `X-Fuel-Version: 1`. Revisions, sequences, receipt cursors, scores and counts are decimal strings; Unix timestamps are integers. Global operation cursors may have gaps between an account's entries.
 
@@ -24,12 +22,13 @@ Native credentials use `Authorization: Fuel <binding-id>:<secret>` over TLS. Bro
 | POST | auth/revoke | `{id,confirmed_last:false}`; the last active binding requires explicit confirmation |
 | POST | auth/delete | `{confirmed:true,account_id,proof}`; proof is a saved random 64-hex deletion-operation secret |
 | POST | auth/delete/status | `{account_id,proof}`; narrow `deleted/removed_bindings` or `unknown`, works after login proof removal |
-| POST | auth/pair | Issue ID, six-character code and five-minute expiry interval |
-| GET | auth/pair/issued?id=... | Owner-only status, phrase and Unix expiry |
+| POST | auth/pair | Issue ID, six-character code, mode and five-minute expiry interval. Basic mode requires `{"flow":"basic-v1"}` |
+| GET | auth/pair/issued?id=... | Issuing device reads pending status, confirmation phrase or basic completion |
 | GET | auth/pair/prepare | Browser candidate; `new=true` only deliberately abandons the old attempt |
-| POST | auth/pair/request | `{code}` using candidate proof; pending ID/phrase, no target account access |
-| GET | auth/pair/pending | Owner's pending requests and comparison phrases |
-| POST | auth/pair/approve | `{id}`; owner confirms the displayed exact request |
+| POST | auth/pair/request | Confirmed mode. `{code}` using candidate proof returns a pending ID and phrase |
+| POST | auth/pair/redeem | Basic mode. `{code}` using candidate proof binds it and returns the completion. Browser current cookie selects the new binding in the same response |
+| GET | auth/pair/pending | Issuing device's pending confirmed requests and phrases |
+| POST | auth/pair/approve | `{id}` on the issuing device completes a confirmed request |
 | POST | auth/pair/cancel | `{id}`; cancel an own pending request |
 | GET | auth/pair/status | Candidate's pending/linked/expired/cancelled status |
 | GET | auth/selection | Read-only browser current/previous public metadata and candidate ID. A rejected current proof retains its binding ID with null account_id; rejected previous is null. No cookie is cleared |
@@ -57,6 +56,16 @@ Native credentials use `Authorization: Fuel <binding-id>:<secret>` over TLS. Bro
 | GET | ratings/:board?metric=wins&hours=24 | wins, battles or win_ratio; draws count as battles, outside win-ratio denominator |
 | POST | analytics/enabled | `{enabled:false}`; confirmed account consent revision, available without an analytics adapter |
 | POST | analytics/events | `{id,name,session,properties:{...},revision:"0"}`; explicitly allowlisted client UI telemetry, requires configured analytics |
+
+## Device transfer
+
+The server selects `Fuel::PairMode::Confirmed` (default), `Basic`, or `Disabled` through `Store.new(..., pair_mode: ...)`. The default and legacy request route retain confirmation. The `flow` field only declares that an issuing client supports the basic protocol. The server chooses the mode and includes it in its issue response. Turn on basic only with a compatible client. A legacy issuer gets `transfer_update_required`.
+
+In **basic** mode, prepare and retain B's candidate proof before submitting the six-character code. A successful `POST auth/pair/redeem` links the candidate permanently and consumes the code in one transaction. No action or connection on A is needed. A native client then selects the already authorized proof in its vault. A browser gets the active cookie in the redemption response; its former current proof becomes previous. Exact retries with the same code and candidate proof return the same completion. A different candidate cannot replay it. B can read an already-completed result through candidate `auth/pair/status` even if the first response was lost.
+
+Completion data is `{id,status:"linked",mode:"basic",account_id,emojis:[...three ordered strings]}`. The issuer can resume polling `auth/pair/issued?id=...` using the issued ID after coming online. The same receipt is available to both participating bindings until one day after the code's expiration. Poll while displaying the transfer and check on reconnect; Fuel has no push notification for this flow. The strings are a post-transfer notice, with no effect on access. Closing or omitting the notice leaves the binding intact.
+
+In **confirmed** mode, B sends `auth/pair/request` and receives a pending ID and comparison phrase. A compares the same phrase and confirms that ID with `auth/pair/approve` on the issuing device. Only then can B use or select the candidate. Both modes refuse uncompleted codes whose issuing binding is revoked. The guest previously selected on B can be restored separately with `auth/switch`; progress is never merged. [Upgrade and rollback](MIGRATION.md#device-transfer-at-040).
 
 ## Snapshots and receipts
 
@@ -90,7 +99,7 @@ and exact retries. The canonical HTTP Handler and SDK expose no new endpoint.
 - `revision_conflict/conflict`: fetch current state or reconcile the exact original operation. Do not change its ID or silently rebase an uncertain intent.
 - Timeout/unavailable: may have committed. Read the original receipt or retry the exact intent. An aborted client connection does not roll back the server.
 - `rate_limited/capacity/poll_active`: bounded backoff, preserving identity/session.
-- `invalid_code`: generic missing/used/expired-code outcome. Transfer preparation retains its proof through retry; owner phrase confirmation remains mandatory.
+- `invalid_code`: generic missing/used/expired-code outcome. Keep the candidate proof through uncertain retries. Confirmed mode requires the issuing device's approval before access.
 
 Deletion status is retained for 30 days. It reveals only that operation's outcome and removed public binding IDs, never progress or a usable login proof. Retired binding IDs remain tombstoned so an old secret cannot recreate a deleted account. The consumer must include any additional data owners in its transactional purge hook.
 

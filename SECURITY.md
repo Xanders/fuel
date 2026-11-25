@@ -1,13 +1,13 @@
 # Security
 
 Optional [trusted issuer login](docs/TRUSTED_LOGIN.md) deliberately grants a
-server-authorized identity to a new device without the ordinary transfer phrase
+server-authorized identity to a new device outside the ordinary transfer
 flow. Its enrollment/issuance methods must never be exposed anonymously: the
 embedding service owns issuer authorization and subject consent. Codes use a
 separate HMAC domain, are one-use, expire after five minutes and atomically create
 ordinary revocable bindings. Retain the candidate proof before redemption; exact
 retries cannot revive revoked/deleted credentials. Ordinary owner-confirmed device
-transfer is unchanged.
+transfer has its own policy and verifier domain.
 
 Applications requiring extra authorization for trusted login must configure the
 same `login_authorizer` on every redeeming Store. It executes inside the locked
@@ -22,7 +22,9 @@ Report vulnerabilities privately through the maintainer's GitHub security adviso
 
 Fuel's baseline validates authentication, current binding revocation, member access, epochs/revisions/input order, resource bounds and game-owned legal-action hooks. This is basic security/anti-cheat infrastructure, not a claim that arbitrary client results are trustworthy. Rules must enforce phase, turn, ownership, speed/range/economy and scoring constraints relevant to each game.
 
-Device secrets are 32 random bytes. Only purpose/namespace-scoped HMAC-SHA256 verifiers are stored; separate server keys protect device and transfer domains. Short account-transfer codes are six distinguishable ASCII characters, five minutes, owner-confirmed and one-time. Code normalization rejects Unicode lookalikes. Permanent guest accounts and active bindings have no server expiry.
+Device secrets are 32 random bytes. Only purpose/namespace-scoped HMAC-SHA256 verifiers are stored; separate server keys protect device and transfer domains. Short account-transfer codes are six distinguishable ASCII characters, expire in five minutes, and can bind only one candidate. Code normalization rejects Unicode lookalikes. Permanent guest accounts and active bindings have no server expiry.
+
+The server chooses the ordinary transfer mode. Confirmed mode requires the issuing device to approve the exact phrase-matched request. Basic mode deliberately relies on possession of the live one-time code and binds B immediately. Share the code only with the intended device owner. Per-source and namespace-wide attempt limits, candidate proof verification and the live issuing binding check apply in both modes. The completion emoji are display data after authorization. Keep confirmed mode where policy requires owner approval and use `PairMode::Disabled` where ordinary transfers are forbidden.
 
 Keep server keys outside database backups and Git. Preserve previous device keys during ordinary rotation via `previous_device_keys`; valid logins rehash to the new key. Rotation is not revocation. Do not discard old keys while un-upgraded permanent bindings still depend on them. Pending transfer codes may be reissued when the transfer key changes.
 
